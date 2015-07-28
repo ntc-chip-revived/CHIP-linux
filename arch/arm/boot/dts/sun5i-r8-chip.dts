@@ -150,6 +150,13 @@
 		#interrupt-cells = <1>;
 
 		regulators {
+			vbat_ext: dcdc1 {
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-name = "vbat-ext";
+				regulator-always-on;
+			};
+
 			vdd_cpu: dcdc2 {
 				regulator-min-microvolt = <1000000>;
 				regulator-max-microvolt = <1300000>;
