@@ -194,12 +194,18 @@
 
 			/* LDO3 is unused */
 			ldo3 {
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
 				regulator-name = "ldo3";
+				regulator-always-on;
 			};
 
 			/* LDO4 is unused */
 			ldo4 {
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
 				regulator-name = "ldo4";
+				regulator-always-on;
 			};
 
 			vcc_1v8: ldo5 {
