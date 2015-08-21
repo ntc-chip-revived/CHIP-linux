@@ -107,6 +107,7 @@ static unsigned int overridesize = 0;
 static char *cache_file = NULL;
 static unsigned int bbt;
 static unsigned int bch;
+static uint poweroff;
 static u_char id_bytes[8] = {
 	[0] = CONFIG_NANDSIM_FIRST_ID_BYTE,
 	[1] = CONFIG_NANDSIM_SECOND_ID_BYTE,
@@ -139,6 +140,7 @@ module_param(overridesize,   uint, 0400);
 module_param(cache_file,     charp, 0400);
 module_param(bbt,	     uint, 0400);
 module_param(bch,	     uint, 0400);
+module_param(poweroff,	     uint, 0400);
 
 MODULE_PARM_DESC(id_bytes,       "The ID bytes returned by NAND Flash 'read ID' command");
 MODULE_PARM_DESC(first_id_byte,  "The first byte returned by NAND Flash 'read ID' command (manufacturer ID) (obsolete)");
@@ -174,6 +176,7 @@ MODULE_PARM_DESC(cache_file,     "File to use to cache nand pages instead of mem
 MODULE_PARM_DESC(bbt,		 "0 OOB, 1 BBT with marker in OOB, 2 BBT with marker in data area");
 MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
 				 "be correctable in 512-byte blocks");
+MODULE_PARM_DESC(poweroff,	 "Poweroff emulation, occurrence is specified in ppm");
 
 /* The largest possible page size */
 #define NS_LARGEST_PAGE_SIZE	4096
@@ -1517,26 +1520,54 @@ static void read_page(struct nandsim *ns, int num)
 	}
 }
 
+static int poweroff_error() {
+	u32 rnd;
+
+	if (!poweroff)
+		return 0;
+
+	rnd = prandom_u32_max(1000000);
+	if (rnd <= poweroff)
+		return 1;
+
+	return 0;
+}
+
 /*
  * Erase all pages in the specified sector.
  */
 static void erase_sector(struct nandsim *ns)
 {
 	union ns_mem *mypage;
+	int poweroff_err;
 	int i;
 
+	poweroff_err = poweroff_error();
+
 	if (ns->cfile) {
-		for (i = 0; i < ns->geom.pgsec; i++)
-			if (__test_and_clear_bit(ns->regs.row + i,
-						 ns->pages_written)) {
+		for (i = 0; i < ns->geom.pgsec; i++) {
+			if (poweroff_err) {
+				loff_t pos = (loff_t)(ns->regs.row + i) * ns->geom.pgszoob;
+				prandom_bytes(ns->file_buf, ns->geom->pgszoob);
+				write_file(ns, ns->cfile, ns->file_buf, ns->geom.pgszoob, pos);
+				set_bit(ns->regs.row + i, ns->pages_written);
+			} else if (__test_and_clear_bit(ns->regs.row + i,
+							ns->pages_written)) {
 				NS_DBG("erase_sector: freeing page %d\n", ns->regs.row + i);
 			}
+		}
 		return;
 	}
 
 	mypage = NS_GET_PAGE(ns);
 	for (i = 0; i < ns->geom.pgsec; i++) {
-		if (mypage->byte != NULL) {
+		if (poweroff_err) {
+			if (!mypage->byte) {
+				mypage->byte = kmem_cache_alloc(ns->nand_pages_slab, GFP_NOFS);
+				if (mypage->byte)
+					prandom_bytes(mypage->byte, ns->geom->pgszoob);
+			}
+		} else if (mypage->byte != NULL) {
 			NS_DBG("erase_sector: freeing page %d\n", ns->regs.row+i);
 			kmem_cache_free(ns->nand_pages_slab, mypage->byte);
 			mypage->byte = NULL;
@@ -1553,6 +1584,13 @@ static int prog_page(struct nandsim *ns, int num)
 	int i;
 	union ns_mem *mypage;
 	u_char *pg_off;
+
+	/*
+	 * Corrupt the page if a poweroff occurs in the middle of the program
+	 * operation
+	 */
+	if (poweroff_error())
+		prandom_bytes(ns->buf.byte, ns->geom->pgszoob);
 
 	if (ns->cfile) {
 		loff_t off;
@@ -1616,6 +1654,8 @@ static int prog_page(struct nandsim *ns, int num)
 
 	return 0;
 }
+
+static
 
 /*
  * If state has any action bit, perform this action.
