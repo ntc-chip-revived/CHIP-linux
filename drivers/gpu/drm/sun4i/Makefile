@@ -9,3 +9,4 @@ obj-$(CONFIG_DRM_SUN4I)		+= sun4i-drm.o
 
 obj-$(CONFIG_DRM_SUN4I)		+= sun4i_backend.o
 obj-$(CONFIG_DRM_SUN4I)		+= sun4i_tcon.o
+obj-$(CONFIG_DRM_SUN4I)		+= sun4i_tv.o
