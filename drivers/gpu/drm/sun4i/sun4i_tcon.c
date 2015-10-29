@@ -15,6 +15,7 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_modes.h>
+#include <drm/drm_panel.h>
 
 #include <linux/clk-provider.h>
 #include <linux/component.h>
@@ -25,6 +26,7 @@
 
 #include "sun4i_crtc.h"
 #include "sun4i_drv.h"
+#include "sun4i_rgb.h"
 #include "sun4i_tcon.h"
 
 void sun4i_tcon_disable(struct sun4i_tcon *tcon)
@@ -418,6 +420,7 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 	struct drm_device *drm = data;
 	struct sun4i_drv *drv = drm->dev_private;
 	struct sun4i_tcon *tcon;
+	struct device_node *np;
 	int ret;
 
 	tcon = devm_kzalloc(dev, sizeof(*tcon), GFP_KERNEL);
@@ -444,7 +447,20 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 		goto err_free_clocks;
 	}
 
-	return 0;
+	np = of_parse_phandle(dev->of_node, "allwinner,panel", 0);
+	if (!np) {
+		dev_info(dev, "No panel found... RGB output disabled\n");
+		return 0;
+	}
+
+	tcon->panel = of_drm_find_panel(np);
+	if (!tcon->panel) {
+		dev_err(dev, "Couldn't find our panel\n");
+		ret = -ENODEV;
+		goto err_free_clocks;
+	}
+
+	return sun4i_rgb_init(drm);
 
 err_free_clocks:
 	sun4i_tcon_free_clocks(tcon);
@@ -466,6 +482,14 @@ static struct component_ops sun4i_tcon_ops = {
 
 static int sun4i_tcon_probe(struct platform_device *pdev)
 {
+	struct device_node *np;
+
+	np = of_parse_phandle(pdev->dev.of_node, "allwinner,panel", 0);
+	if (np) {
+		if (!of_drm_find_panel(np))
+			return -EPROBE_DEFER;
+	}
+
 	return component_add(&pdev->dev, &sun4i_tcon_ops);
 }
 

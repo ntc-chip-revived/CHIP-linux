@@ -152,6 +152,8 @@ struct sun4i_tcon {
 
 	/* Pixel clock */
 	struct clk			*dclk;
+
+	struct drm_panel		*panel;
 };
 
 /* Global Control */
