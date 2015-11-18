@@ -16,6 +16,10 @@
 #include <linux/mtd/nand.h>
 #include <linux/slab.h>
 
+/* Generic flash bbt descriptors */
+static uint8_t bbt_pattern[] = {'B', 'b', 't', '0' };
+static uint8_t mirror_pattern[] = {'1', 't', 'b', 'B' };
+
 static u8 h27ucg8t2a_read_retry_regs[] = {
 	0xcc, 0xbf, 0xaa, 0xab, 0xcd, 0xad, 0xae, 0xaf
 };
@@ -314,9 +318,18 @@ static const struct hq27_rr_table hq27_rr_tables[] = {
 	{ .page = 0x200, .size = 528 },
 };
 
+static void h27q_cleanup(struct mtd_info *mtd)
+{
+	struct nand_chip *chip = mtd->priv;
+
+	kfree(chip->bbt_td);
+	h27_cleanup(mtd);
+}
+
 static int h27q_init(struct mtd_info *mtd, const uint8_t *id)
 {
 	struct nand_chip *chip = mtd->priv;
+	struct nand_bbt_descr *bbt_descs = NULL;
 	struct hynix_nand *hynix;
 	int i, ret;
 
@@ -324,8 +337,27 @@ static int h27q_init(struct mtd_info *mtd, const uint8_t *id)
 	if (!hynix)
 		return -ENOMEM;
 
+	bbt_descs = kzalloc(2 * sizeof(*bbt_descs), GFP_KERNEL);
+	if (!bbt_descs) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	bbt_descs[0].options = NAND_BBT_LASTBLOCK | NAND_BBT_CREATE |
+			       NAND_BBT_WRITE | NAND_BBT_2BIT |
+			       NAND_BBT_VERSION | NAND_BBT_PERCHIP |
+			       NAND_BBT_NO_OOB;
+	bbt_descs[1].options = bbt_descs[0].options;
+	bbt_descs[0].len = bbt_descs[1].len = 4;
+	bbt_descs[0].veroffs = bbt_descs[1].veroffs = 4;
+	bbt_descs[0].maxblocks = bbt_descs[1].maxblocks = 16;
+	bbt_descs[0].pattern = bbt_pattern;
+	bbt_descs[1].pattern = mirror_pattern;
+
+	chip->bbt_td = bbt_descs;
+	chip->bbt_md = bbt_descs + 1;
 	chip->manuf_priv = hynix;
-	chip->manuf_cleanup = h27_cleanup;
+	chip->manuf_cleanup = h27q_cleanup;
 	chip->set_slc_mode = h27q_set_slc_mode;
 
 	for (i = 0; i < ARRAY_SIZE(hq27_rr_tables); i++) {
@@ -334,8 +366,11 @@ static int h27q_init(struct mtd_info *mtd, const uint8_t *id)
 			break;
 	}
 
-	if (ret)
+out:
+	if (ret) {
+		kfree(bbt_descs);
 		kfree(hynix);
+	}
 
 	return ret;
 }
