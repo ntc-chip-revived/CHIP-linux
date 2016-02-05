@@ -112,9 +112,11 @@ static void __init sun4i_a10_display_init(struct device_node *node,
 	struct reset_data *reset_data;
 	struct clk_divider *div = NULL;
 	struct clk_gate *gate;
+	struct resource res;
 	struct clk_mux *mux;
 	void __iomem *reg;
 	struct clk *clk;
+	int ret;
 
 	of_property_read_string(node, "clock-output-names", &clk_name);
 
@@ -124,11 +126,15 @@ static void __init sun4i_a10_display_init(struct device_node *node,
 		return;
 	}
 
-	of_clk_parent_fill(node, parents, data->parents);
+	ret = of_clk_parent_fill(node, parents, data->parents);
+	if (ret != data->parents) {
+		pr_err("%s Could not retrieve the parents\n", clk_name);
+		goto unmap;
+	}
 
 	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
 	if (!mux)
-		return;
+		goto unmap;
 
 	mux->reg = reg;
 	mux->shift = data->offset_mux;
@@ -166,23 +172,32 @@ static void __init sun4i_a10_display_init(struct device_node *node,
 		goto free_div;
 	}
 
-	of_clk_add_provider(node, of_clk_src_simple_get, clk);
+	ret = of_clk_add_provider(node, of_clk_src_simple_get, clk);
+	if (ret) {
+		pr_err("%s: Couldn't register DT provider\n", clk_name);
+		goto free_clk;
+	}
 
 	if (!data->has_rst)
 		return;
 
 	reset_data = kzalloc(sizeof(*reset_data), GFP_KERNEL);
 	if (!reset_data)
-		goto free_clk;
+		goto free_of_clk;
 
 	reset_data->reg = reg;
 	reset_data->offset = data->offset_rst;
 	reset_data->lock = &sun4i_a10_display_lock;
-	reset_data->rcdev.nr_resets = 1;
+	reset_data->rcdev.nr_resets = data->has_rst;
 	reset_data->rcdev.ops = &sun4i_a10_display_reset_ops;
 	reset_data->rcdev.of_node = node;
-	reset_data->rcdev.of_reset_n_cells = 0;
-	reset_data->rcdev.of_xlate = &sun4i_a10_display_reset_xlate;
+
+	if (data->has_rst == 1) {
+		reset_data->rcdev.of_reset_n_cells = 0;
+		reset_data->rcdev.of_xlate = &sun4i_a10_display_reset_xlate;
+	} else {
+		reset_data->rcdev.of_reset_n_cells = 1;
+	}
 
 	if (reset_controller_register(&reset_data->rcdev)) {
 		pr_err("%s: Couldn't register the reset controller\n",
@@ -194,6 +209,8 @@ static void __init sun4i_a10_display_init(struct device_node *node,
 
 free_reset:
 	kfree(reset_data);
+free_of_clk:
+	of_clk_del_provider(node);
 free_clk:
 	clk_unregister(clk);
 free_div:
@@ -203,10 +220,14 @@ free_gate:
 	kfree(gate);
 free_mux:
 	kfree(mux);
+unmap:
+	iounmap(reg);
+	of_address_to_resource(node, 0, &res);
+	release_mem_region(res.start, resource_size(&res));
 }
 
 static struct sun4i_a10_display_clk_data sun4i_a10_tcon_ch0_data = {
-	.has_rst	= true,
+	.has_rst	= 2,
 	.parents	= 4,
 	.offset_en	= 31,
 	.offset_rst	= 29,
@@ -223,6 +244,7 @@ CLK_OF_DECLARE(sun4i_a10_tcon_ch0, "allwinner,sun4i-a10-tcon-ch0-clk",
 
 static struct sun4i_a10_display_clk_data sun4i_a10_display_data = {
 	.has_div	= true,
+	.has_rst	= 1,
 	.parents	= 3,
 	.offset_en	= 31,
 	.offset_rst	= 30,
