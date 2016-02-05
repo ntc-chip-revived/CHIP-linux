@@ -23,7 +23,7 @@
 
 struct sun4i_a10_display_clk_data {
 	bool	has_div;
-	bool	has_rst;
+	u8	has_rst;
 	u8	parents;
 
 	u8	offset_en;
@@ -59,7 +59,7 @@ static int sun4i_a10_display_assert(struct reset_controller_dev *rcdev,
 	spin_lock_irqsave(data->lock, flags);
 
 	reg = readl(data->reg);
-	writel(reg & ~BIT(data->offset), data->reg);
+	writel(reg & ~BIT(data->offset + id), data->reg);
 
 	spin_unlock_irqrestore(data->lock, flags);
 
@@ -76,7 +76,7 @@ static int sun4i_a10_display_deassert(struct reset_controller_dev *rcdev,
 	spin_lock_irqsave(data->lock, flags);
 
 	reg = readl(data->reg);
-	writel(reg | BIT(data->offset), data->reg);
+	writel(reg | BIT(data->offset + id), data->reg);
 
 	spin_unlock_irqrestore(data->lock, flags);
 
@@ -88,7 +88,7 @@ static int sun4i_a10_display_status(struct reset_controller_dev *rcdev,
 {
 	struct reset_data *data = rcdev_to_reset_data(rcdev);
 
-	return !(readl(data->reg) & BIT(data->offset));
+	return !(readl(data->reg) & BIT(data->offset + id));
 }
 
 static const struct reset_control_ops sun4i_a10_display_reset_ops = {
