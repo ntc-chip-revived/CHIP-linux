@@ -109,8 +109,8 @@
 					#size-cells = <0>;
 					reg = <1>;
 
-					tcon0_out_tve0: endpoint@0 {
-						reg = <0>;
+					tcon0_out_tve0: endpoint@1 {
+						reg = <1>;
 						remote-endpoint = <&tve0_in_tcon0>;
 					};
 				};
