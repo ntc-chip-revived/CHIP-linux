@@ -31,6 +31,7 @@ static void __init sun4i_a10_pll3_setup(struct device_node *node)
 	const char *clk_name = node->name, *parent;
 	struct clk_multiplier *mult;
 	struct clk_gate *gate;
+	struct resource res;
 	void __iomem *reg;
 	struct clk *clk;
 	int ret;
@@ -46,7 +47,7 @@ static void __init sun4i_a10_pll3_setup(struct device_node *node)
 
 	gate = kzalloc(sizeof(*gate), GFP_KERNEL);
 	if (!gate)
-		return;
+		goto err_unmap;
 
 	gate->reg = reg;
 	gate->bit_idx = SUN4I_A10_PLL3_GATE_BIT;
@@ -73,8 +74,10 @@ static void __init sun4i_a10_pll3_setup(struct device_node *node)
 	}
 
 	ret = of_clk_add_provider(node, of_clk_src_simple_get, clk);
-	if (WARN_ON(ret))
+	if (ret) {
+		pr_err("%s: Couldn't register DT provider\n", clk_name);		
 		goto err_clk_unregister;
+	}
 
 	return;
 
@@ -84,6 +87,10 @@ err_free_mult:
 	kfree(mult);
 err_free_gate:
 	kfree(gate);
+err_unmap:
+	iounmap(reg);
+	of_address_to_resource(node, 0, &res);
+	release_mem_region(res.start, resource_size(&res));
 }
 
 CLK_OF_DECLARE(sun4i_a10_pll3, "allwinner,sun4i-a10-pll3-clk",
