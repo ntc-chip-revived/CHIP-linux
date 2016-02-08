@@ -21,6 +21,7 @@
 #include <linux/component.h>
 #include <linux/ioport.h>
 #include <linux/of_address.h>
+#include <linux/of_graph.h>
 #include <linux/of_irq.h>
 #include <linux/regmap.h>
 
@@ -482,11 +483,34 @@ static struct component_ops sun4i_tcon_ops = {
 
 static int sun4i_tcon_probe(struct platform_device *pdev)
 {
-	struct device_node *np;
+	struct device_node *node = pdev->dev.of_node;
+	struct device_node *panel_node, *end_node, *port;
 
-	np = of_parse_phandle(pdev->dev.of_node, "allwinner,panel", 0);
-	if (np) {
-		if (!of_drm_find_panel(np))
+	/* Inputs are listed first, then outputs */
+	port = of_graph_get_port_by_id(node, 1);
+
+	for_each_endpoint_of_node(port, end_node) {
+		struct of_endpoint endpoint;
+
+		if (of_graph_parse_endpoint(end_node, &endpoint))
+			continue;
+
+		/*
+		 * The endpoint 0 is the panel, we don't really care
+		 * about the others.
+		 */
+		if (endpoint.id)
+			continue;
+
+		panel_node = of_graph_get_remote_port_parent(end_node);
+		if (!panel_node)
+			continue;
+
+		/*
+		 * If the panel is not ready yet, defer the probe
+		 * before registering into the component framework.
+		 */
+		if (!of_drm_find_panel(panel_node))
 			return -EPROBE_DEFER;
 	}
 
