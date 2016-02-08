@@ -242,17 +242,10 @@ static int sun4i_drv_add_endpoints(struct device *dev,
 		return count;
 	}
 
-	for_each_child_of_node(port, ep) {
+	for_each_available_child_of_node(port, ep) {
 		remote = of_graph_get_remote_port_parent(ep);
 		if (!remote) {
 			DRM_DEBUG_DRIVER("Error retrieving the output node\n");
-			of_node_put(remote);
-			continue;
-		}
-
-		if (!of_device_is_available(remote)) {
-			DRM_DEBUG_DRIVER("Output node %s disabled\n",
-					 remote->full_name);
 			of_node_put(remote);
 			continue;
 		}
