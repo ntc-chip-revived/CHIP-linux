@@ -575,6 +575,7 @@ static int sun4i_tv_bind(struct device *dev, struct device *master,
 	if (!tv)
 		return -ENOMEM;
 	tv->drv = drv;
+	dev_set_drvdata(dev, tv);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	regs = devm_ioremap_resource(dev, res);
@@ -634,7 +635,11 @@ err_cleanup_connector:
 static void sun4i_tv_unbind(struct device *dev, struct device *master,
 			    void *data)
 {
-#warning FIXME
+	struct sun4i_tv *tv = dev_get_drvdata(dev);
+
+	drm_connector_cleanup(&tv->connector);
+	drm_encoder_cleanup(&tv->encoder);
+	clk_disable_unprepare(tv->clk);
 }
 
 static struct component_ops sun4i_tv_ops = {
