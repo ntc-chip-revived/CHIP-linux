@@ -415,6 +415,22 @@ static int sun4i_tcon_init_regmap(struct device *dev,
 	return 0;
 }
 
+static struct device_node *sun4i_tcon_find_panel(struct device_node *node)
+{
+	struct device_node *port, *end_node;
+
+	/* Inputs are listed first, then outputs */
+	port = of_graph_get_port_by_id(node, 1);
+
+	/* Iterate over the endpoints to find a panel */
+	for_each_child_of_node(port, end_node)
+		/* If the endpoint is not a panel, go on */
+		if (of_property_read_bool(end_node, "allwinner,panel"))
+			return of_graph_get_remote_port_parent(end_node);
+
+	return NULL;
+}
+
 static int sun4i_tcon_bind(struct device *dev, struct device *master,
 			   void *data)
 {
@@ -448,7 +464,7 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 		goto err_free_clocks;
 	}
 
-	np = of_parse_phandle(dev->of_node, "allwinner,panel", 0);
+	np = sun4i_tcon_find_panel(dev->of_node);
 	if (!np) {
 		dev_info(dev, "No panel found... RGB output disabled\n");
 		return 0;
@@ -484,27 +500,11 @@ static struct component_ops sun4i_tcon_ops = {
 static int sun4i_tcon_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
-	struct device_node *panel_node, *end_node, *port;
+	struct device_node *panel_node;
 
-	/* Inputs are listed first, then outputs */
-	port = of_graph_get_port_by_id(node, 1);
-
-	for_each_endpoint_of_node(port, end_node) {
-		struct of_endpoint endpoint;
-
-		if (of_graph_parse_endpoint(end_node, &endpoint))
-			continue;
-
-		/*
-		 * The endpoint 0 is the panel, we don't really care
-		 * about the others.
-		 */
-		if (endpoint.id)
-			continue;
-
-		panel_node = of_graph_get_remote_port_parent(end_node);
-		if (!panel_node)
-			continue;
+	panel_node = sun4i_tcon_find_panel(node);
+	if (panel_node) {
+		printk("Found a panel!\n");
 
 		/*
 		 * If the panel is not ready yet, defer the probe
