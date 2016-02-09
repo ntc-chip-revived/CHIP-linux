@@ -19,6 +19,7 @@
 #include <drm/drm_plane_helper.h>
 
 #include <linux/component.h>
+#include <linux/reset.h>
 
 #include "sun4i_backend.h"
 #include "sun4i_drv.h"
@@ -214,7 +215,7 @@ static int sun4i_backend_bind(struct device *dev, struct device *master,
 	struct sun4i_backend *backend;
 	struct resource *res;
 	void __iomem *regs;
-	int i;
+	int i, ret;
 
 	backend = devm_kzalloc(dev, sizeof(*backend), GFP_KERNEL);
 	if (!backend)
@@ -236,24 +237,39 @@ static int sun4i_backend_bind(struct device *dev, struct device *master,
 		return PTR_ERR(backend->regs);
 	}
 
+	backend->reset = devm_reset_control_get(dev, NULL);
+	if (IS_ERR(backend->reset)) {
+		dev_err(dev, "Couldn't get our reset line\n");
+		return PTR_ERR(backend->reset);
+	}
+
+	ret = reset_control_deassert(backend->reset);
+	if (ret) {
+		dev_err(dev, "Couldn't deassert our reset line\n");
+		return ret;
+	}
+
 	backend->bus_clk = devm_clk_get(dev, "ahb");
 	if (IS_ERR(backend->bus_clk)) {
 		dev_err(dev, "Couldn't get the backend bus clock\n");
-		return PTR_ERR(backend->bus_clk);
+		ret = PTR_ERR(backend->bus_clk);
+		goto err_assert_reset;
 	}
 	clk_prepare_enable(backend->bus_clk);
 
 	backend->mod_clk = devm_clk_get(dev, "mod");
 	if (IS_ERR(backend->mod_clk)) {
 		dev_err(dev, "Couldn't get the backend module clock\n");
-		return PTR_ERR(backend->mod_clk);
+		ret = PTR_ERR(backend->mod_clk);
+		goto err_disable_bus_clk;
 	}
 	clk_prepare_enable(backend->mod_clk);
 
 	backend->ram_clk = devm_clk_get(dev, "ram");
 	if (IS_ERR(backend->ram_clk)) {
 		dev_err(dev, "Couldn't get the backend RAM clock\n");
-		return PTR_ERR(backend->ram_clk);
+		ret = PTR_ERR(backend->ram_clk);
+		goto err_disable_mod_clk;
 	}
 	clk_prepare_enable(backend->ram_clk);
 
@@ -271,6 +287,14 @@ static int sun4i_backend_bind(struct device *dev, struct device *master,
 		     SUN4I_BACKEND_MODCTL_START_CTL);
 
 	return 0;
+
+err_disable_mod_clk:
+	clk_disable_unprepare(backend->mod_clk);
+err_disable_bus_clk:
+	clk_disable_unprepare(backend->bus_clk);
+err_assert_reset:
+	reset_control_assert(backend->reset);
+	return ret;
 }
 
 static void sun4i_backend_unbind(struct device *dev, struct device *master,
@@ -281,6 +305,7 @@ static void sun4i_backend_unbind(struct device *dev, struct device *master,
 	clk_disable_unprepare(backend->ram_clk);
 	clk_disable_unprepare(backend->mod_clk);
 	clk_disable_unprepare(backend->bus_clk);
+	reset_control_assert(backend->reset);
 }
 
 static struct component_ops sun4i_backend_ops = {

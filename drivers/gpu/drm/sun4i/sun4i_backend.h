@@ -15,6 +15,7 @@
 
 #include <linux/clk.h>
 #include <linux/regmap.h>
+#include <linux/reset.h>
 
 #define SUN4I_BACKEND_MODCTL_REG		0x800
 #define SUN4I_BACKEND_MODCTL_LINE_SEL			BIT(29)
@@ -138,11 +139,13 @@
 #define SUN4I_BACKEND_PIPE_OFF(p)		(0x5000 + (0x400 * (p)))
 
 struct sun4i_backend {
-	struct regmap	*regs;
+	struct regmap		*regs;
 
-	struct clk	*bus_clk;
-	struct clk	*mod_clk;
-	struct clk	*ram_clk;
+	struct reset_control	*reset;
+
+	struct clk		*bus_clk;
+	struct clk		*mod_clk;
+	struct clk		*ram_clk;
 };
 
 void sun4i_backend_apply_color_correction(struct sun4i_backend *backend);

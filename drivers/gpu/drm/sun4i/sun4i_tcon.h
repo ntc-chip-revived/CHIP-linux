@@ -17,6 +17,7 @@
 #include <drm/drm_crtc.h>
 
 #include <linux/kernel.h>
+#include <linux/reset.h>
 
 #define SUN4I_TCON_GCTL_REG			0x0
 #define SUN4I_TCON_GCTL_TCON_ENABLE			BIT(31)
@@ -152,6 +153,9 @@ struct sun4i_tcon {
 
 	/* Pixel clock */
 	struct clk			*dclk;
+
+	/* Reset control */
+	struct reset_control		*lcd_rst;
 
 	struct drm_panel		*panel;
 };

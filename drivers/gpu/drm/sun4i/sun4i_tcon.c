@@ -24,6 +24,7 @@
 #include <linux/of_graph.h>
 #include <linux/of_irq.h>
 #include <linux/regmap.h>
+#include <linux/reset.h>
 
 #include "sun4i_crtc.h"
 #include "sun4i_drv.h"
@@ -464,6 +465,18 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 		goto err_free_clocks;
 	}
 
+	tcon->lcd_rst = devm_reset_control_get(dev, "lcd");
+	if (IS_ERR(tcon->lcd_rst)) {
+		dev_err(dev, "Couldn't get our reset line\n");
+		goto err_free_irq;
+	}
+
+	ret = reset_control_deassert(tcon->lcd_rst);
+	if (ret) {
+		dev_err(dev, "Couldn't deassert our reset line\n");
+		goto err_free_reset;
+	}
+
 	np = sun4i_tcon_find_panel(dev->of_node);
 	if (!np) {
 		dev_info(dev, "No panel found... RGB output disabled\n");
@@ -474,11 +487,15 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 	if (!tcon->panel) {
 		dev_err(dev, "Couldn't find our panel\n");
 		ret = -ENODEV;
-		goto err_free_clocks;
+		goto err_assert_reset;
 	}
 
 	return sun4i_rgb_init(drm);
 
+err_assert_reset:
+	reset_control_assert(tcon->lcd_rst);
+err_free_reset:
+err_free_irq:
 err_free_clocks:
 	sun4i_tcon_free_clocks(tcon);
 	return ret;
