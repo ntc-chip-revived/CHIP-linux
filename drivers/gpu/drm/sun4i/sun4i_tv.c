@@ -14,6 +14,7 @@
 #include <linux/component.h>
 #include <linux/of_address.h>
 #include <linux/regmap.h>
+#include <linux/reset.h>
 
 #include <drm/drmP.h>
 #include <drm/drm_atomic_helper.h>
@@ -172,6 +173,7 @@ struct sun4i_tv {
 
 	struct clk		*clk;
 	struct regmap		*regs;
+	struct reset_control	*reset;
 
 	struct sun4i_drv	*drv;
 };
@@ -591,10 +593,23 @@ static int sun4i_tv_bind(struct device *dev, struct device *master,
 		return PTR_ERR(tv->regs);
 	}
 
+	tv->reset = devm_reset_control_get(dev, NULL);
+	if (IS_ERR(tv->reset)) {
+		dev_err(dev, "Couldn't get our reset line\n");
+		return PTR_ERR(tv->reset);
+	}
+
+	ret = reset_control_deassert(tv->reset);
+	if (ret) {
+		dev_err(dev, "Couldn't deassert our reset line\n");
+		return ret;
+	}
+
 	tv->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(tv->clk)) {
 		dev_err(dev, "Couldn't get the TV encoder clock\n");
-		return PTR_ERR(tv->clk);
+		ret = PTR_ERR(tv->clk);
+		goto err_assert_reset;
 	}
 	clk_prepare_enable(tv->clk);
 
@@ -606,7 +621,7 @@ static int sun4i_tv_bind(struct device *dev, struct device *master,
 			       DRM_MODE_ENCODER_TVDAC);
 	if (ret) {
 		dev_err(dev, "Couldn't initialise the TV encoder\n");
-		return ret;
+		goto err_disable_clk;
 	}
 
 	tv->encoder.possible_crtcs = BIT(0);
@@ -629,6 +644,10 @@ static int sun4i_tv_bind(struct device *dev, struct device *master,
 
 err_cleanup_connector:
 	drm_encoder_cleanup(&tv->encoder);
+err_disable_clk:
+	clk_disable_unprepare(tv->clk);
+err_assert_reset:
+	reset_control_assert(tv->reset);
 	return ret;
 }
 
