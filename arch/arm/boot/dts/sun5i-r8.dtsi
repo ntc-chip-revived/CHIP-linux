@@ -63,6 +63,7 @@
 			compatible = "allwinner,sun4i-a10-tv-encoder";
 			reg = <0x01c0a000 0x1000>;
 			clocks = <&ahb_gates 34>;
+			resets = <&tcon_ch0_clk 0>;
 			status = "disabled";
 
 			port {
@@ -80,6 +81,8 @@
 			compatible = "allwinner,sun4i-a10-tcon";
 			reg = <0x01c0c000 0x1000>;
 			interrupts = <44>;
+			resets = <&tcon_ch0_clk 1>;
+			reset-names = "lcd";
 			clocks = <&ahb_gates 36>,
 				 <&tcon_ch0_clk>,
 				 <&tcon_ch1_clk>;
