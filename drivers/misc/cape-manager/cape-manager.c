@@ -19,6 +19,14 @@ DEFINE_SPINLOCK(cape_lock);
 
 #define CAPE_MANAGER_MAGIC	0xdeadbeef
 
+#define dip_convert(field)					\
+	(							\
+		(sizeof(field) == 1) ? field :			\
+		(sizeof(field) == 2) ? be16_to_cpu(field) :	\
+		(sizeof(field) == 4) ? be32_to_cpu(field) :	\
+		-1						\
+	)
+
 struct cape {
 	struct list_head	head;
 
@@ -72,8 +80,9 @@ static int cape_manager_load(struct device *dev, struct cape *cape)
 	}
 
 	cape->dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x-%x.dtbo",
-			cape->header->vendor_id, cape->header->product_id,
-			cape->header->product_version);
+			 dip_convert(cape->header->vendor_id),
+			 dip_convert(cape->header->product_id),
+			 dip_convert(cape->header->product_version));
 	if (!cape->dtbo)
 		return -ENOMEM;
 
@@ -129,8 +138,9 @@ void cape_manager_insert(struct device *dev, struct cape_header *header)
 	struct list_head *pos, *n;
 	struct cape *cape;
 
-	if (header->magic != CAPE_MANAGER_MAGIC) {
-		dev_err(dev, "Bad magic value (%x)\n", header->magic);
+	if (dip_convert(header->magic) != CAPE_MANAGER_MAGIC) {
+		dev_err(dev, "Bad magic value (%x)\n",
+			dip_convert(header->magic));
 		return;
 	}
 
@@ -140,11 +150,11 @@ void cape_manager_insert(struct device *dev, struct cape_header *header)
 
 #if 0
 	/* debug */
-	pr_err("magic: 0x%x\n", header->magic);
-	pr_err("version: %d\n", header->version);
-	pr_err("vendor id: 0x%x\n", header->vendor_id);
-	pr_err("product id: 0x%x\n", header->product_id);
-	pr_err("product version: %d\n", header->product_version);
+	pr_err("magic: 0x%x\n", dip_convert(header->magic));
+	pr_err("version: %d\n", dip_convert(header->version));
+	pr_err("vendor id: 0x%x\n", dip_convert(header->vendor_id));
+	pr_err("product id: 0x%x\n", dip_convert(header->product_id));
+	pr_err("product version: %d\n", dip_convert(header->product_version));
 	pr_err("vendor name: %s\n", header->vendor_name);
 	pr_err("product name: %s\n", header->product_name);
 #endif
@@ -154,9 +164,9 @@ void cape_manager_insert(struct device *dev, struct cape_header *header)
 	list_for_each_safe(pos, n, &cape_list) {
 		cape = list_entry(pos, struct cape, head);
 
-		if (cape->header->vendor_id == header->vendor_id &&
-		    cape->header->product_id == header->product_id &&
-		    cape->header->product_version == header->product_version) {
+		if (dip_convert(cape->header->vendor_id) == dip_convert(header->vendor_id) &&
+		    dip_convert(cape->header->product_id) == dip_convert(header->product_id) &&
+		    dip_convert(cape->header->product_version) == dip_convert(header->product_version)) {
 			dev_err(dev, "Cape already loaded\n");
 			goto err;
 		}
