@@ -17,7 +17,7 @@
 LIST_HEAD(cape_list);
 DEFINE_SPINLOCK(cape_lock);
 
-#define CAPE_MANAGER_MAGIC	0xdeadbeef
+#define CAPE_MANAGER_MAGIC	0x43484950
 
 #define dip_convert(field)					\
 	(							\
