@@ -11,6 +11,7 @@
 #include <linux/list.h>
 #include <linux/of.h>
 #include <linux/of_fdt.h>
+#include <linux/slab.h>
 
 #include "cape-manager.h"
 
@@ -72,6 +73,7 @@ static int cape_manager_check_overlay(struct device *dev, struct cape *cape)
 static int cape_manager_load(struct device *dev, struct cape *cape)
 {
 	int err;
+	char *dtbo;
 
 	if (cape->loaded) {
 		dev_err(dev, "Overlay already loaded for cape %s\n",
@@ -79,19 +81,30 @@ static int cape_manager_load(struct device *dev, struct cape *cape)
 		return -EAGAIN;
 	}
 
-	cape->dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x-%x.dtbo",
+	dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x-%x.dtbo",
 			 dip_convert(cape->header->vendor_id),
 			 dip_convert(cape->header->product_id),
 			 dip_convert(cape->header->product_version));
-	if (!cape->dtbo)
+	if (!dtbo)
 		return -ENOMEM;
 
-	err = request_firmware_direct(&cape->fw, cape->dtbo, dev);
+	/* First try to request the overlay specific to the version */
+	err = request_firmware_direct(&cape->fw, dtbo, dev);
 	if (err) {
-		dev_err(dev, "Could not find overlay %s for cape %s\n",
-			cape->dtbo, cape->header->product_name);
-		return err;
+		/* If it fails, try with a generic one */
+		kfree(dtbo);
+
+		dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x.dtbo",
+				 dip_convert(cape->header->vendor_id),
+				 dip_convert(cape->header->product_id));
+		err = request_firmware_direct(&cape->fw, dtbo, dev);
+		if (err) {
+			dev_err(dev, "Could not find overlay %s for cape %s\n",
+				dtbo, cape->header->product_name);
+			return err;
+		}
 	}
+	cape->dtbo = dtbo;
 
 	of_fdt_unflatten_tree((unsigned long *)cape->fw->data, &cape->overlay);
 	if (!cape->overlay) {
