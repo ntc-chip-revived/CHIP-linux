@@ -78,7 +78,7 @@
 		};
 
 		tcon0: lcd-controller@01c0c000 {
-			compatible = "allwinner,sun4i-a10-tcon";
+			compatible = "allwinner,sun5i-a13-tcon";
 			reg = <0x01c0c000 0x1000>;
 			interrupts = <44>;
 			resets = <&tcon_ch0_clk 1>;
