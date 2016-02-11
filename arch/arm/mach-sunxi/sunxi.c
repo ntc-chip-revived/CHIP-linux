@@ -20,7 +20,6 @@
 static void __init sunxi_dt_cpufreq_init(void)
 {
 	platform_device_register_simple("cpufreq-dt", -1, NULL, 0);
-	platform_device_register_simple("cape-ds2431", -1, NULL, 0);
 }
 
 static const char * const sunxi_board_dt_compat[] = {
