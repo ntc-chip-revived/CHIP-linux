@@ -20,146 +20,281 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 
-#define SUN4I_TCON_CH1_SCLK_NAME_LEN	32
+#define TCON_CH1_SCLK2_PARENTS		4
 
-#define SUN4I_A10_TCON_CH1_SCLK2_PARENTS	4
+#define TCON_CH1_SCLK2_GATE_BIT		BIT(31)
+#define TCON_CH1_SCLK2_MUX_MASK		3
+#define TCON_CH1_SCLK2_MUX_SHIFT	24
+#define TCON_CH1_SCLK2_DIV_MASK		0xf
+#define TCON_CH1_SCLK2_DIV_SHIFT	0
 
-#define SUN4I_A10_TCON_CH1_SCLK2_GATE_BIT	31
-#define SUN4I_A10_TCON_CH1_SCLK2_MUX_MASK	3
-#define SUN4I_A10_TCON_CH1_SCLK2_MUX_SHIFT	24
-#define SUN4I_A10_TCON_CH1_SCLK2_DIV_WIDTH	4
-#define SUN4I_A10_TCON_CH1_SCLK2_DIV_SHIFT	0
+#define TCON_CH1_SCLK1_GATE_BIT		BIT(15)
+#define TCON_CH1_SCLK1_HALF_BIT		BIT(11)
 
-#define SUN4I_A10_TCON_CH1_SCLK1_GATE_BIT	15
-#define SUN4I_A10_TCON_CH1_SCLK1_DIV_WIDTH	1
-#define SUN4I_A10_TCON_CH1_SCLK1_DIV_SHIFT	11
+struct tcon_ch1_clk {
+	struct clk_hw	hw;
+	spinlock_t	lock;
+	void __iomem	*reg;
+};
 
-static DEFINE_SPINLOCK(sun4i_a10_tcon_ch1_lock);
+#define hw_to_tclk(hw)	container_of(hw, struct tcon_ch1_clk, hw)
 
-static void __init sun4i_a10_tcon_ch1_setup(struct device_node *node)
+static void tcon_ch1_disable(struct clk_hw *hw)
 {
-	const char *sclk2_parents[SUN4I_A10_TCON_CH1_SCLK2_PARENTS];
-	const char *sclk1_name = node->name;
-	const char *sclk2_name;
-	struct clk_divider *sclk1_div, *sclk2_div;
-	struct clk_gate *sclk1_gate, *sclk2_gate;
-	struct clk_mux *sclk2_mux;
-	struct clk *sclk1, *sclk2;
+	struct tcon_ch1_clk *tclk = hw_to_tclk(hw);
+	unsigned long flags;
+	u32 reg;
+
+	spin_lock_irqsave(&tclk->lock, flags);
+	reg = readl(tclk->reg);
+	reg &= ~(TCON_CH1_SCLK2_GATE_BIT | TCON_CH1_SCLK1_GATE_BIT);
+	writel(reg, tclk->reg);
+	spin_unlock_irqrestore(&tclk->lock, flags);
+}
+
+static int tcon_ch1_enable(struct clk_hw *hw)
+{
+	struct tcon_ch1_clk *tclk = hw_to_tclk(hw);
+	unsigned long flags;
+	u32 reg;
+
+	spin_lock_irqsave(&tclk->lock, flags);
+	reg = readl(tclk->reg);
+	reg |= TCON_CH1_SCLK2_GATE_BIT | TCON_CH1_SCLK1_GATE_BIT;
+	writel(reg, tclk->reg);
+	spin_unlock_irqrestore(&tclk->lock, flags);
+
+	return 0;
+}
+
+static int tcon_ch1_is_enabled(struct clk_hw *hw)
+{
+	struct tcon_ch1_clk *tclk = hw_to_tclk(hw);
+	u32 reg;
+
+	reg = readl(tclk->reg);
+	return reg & (TCON_CH1_SCLK2_GATE_BIT | TCON_CH1_SCLK1_GATE_BIT);
+}
+
+static u8 tcon_ch1_get_parent(struct clk_hw *hw)
+{
+	struct tcon_ch1_clk *tclk = hw_to_tclk(hw);
+	int num_parents = clk_hw_get_num_parents(hw);
+	u32 reg;
+
+	reg = readl(tclk->reg) >> TCON_CH1_SCLK2_MUX_SHIFT;
+	reg &= reg >> TCON_CH1_SCLK2_MUX_MASK;
+
+	if (reg >= num_parents)
+		return -EINVAL;
+
+	return reg;
+}
+
+static int tcon_ch1_set_parent(struct clk_hw *hw, u8 index)
+{
+	struct tcon_ch1_clk *tclk = hw_to_tclk(hw);
+	unsigned long flags;
+	u32 reg;
+
+	spin_lock_irqsave(&tclk->lock, flags);
+	reg = readl(tclk->reg);
+	reg &= ~(TCON_CH1_SCLK2_MUX_MASK << TCON_CH1_SCLK2_MUX_SHIFT);
+	reg |= index << TCON_CH1_SCLK2_MUX_SHIFT;
+	writel(reg, tclk->reg);
+	spin_unlock_irqrestore(&tclk->lock, flags);
+
+	return 0;
+};
+
+static unsigned long tcon_ch1_calc_divider(unsigned long rate,
+					   unsigned long parent_rate,
+					   u8 *div,
+					   bool *half)
+{
+	unsigned long best_rate = 0;
+	u8 best_m = 0, m;
+	bool is_double;
+
+	for (m = 1; m < 16; m++) {
+		u8 d;
+
+		for (d = 1; d < 3; d++) {
+			unsigned long tmp_rate;
+
+			tmp_rate = parent_rate / m / d;
+
+			if (tmp_rate > rate)
+				continue;
+
+			if (!best_rate ||
+			    (rate - tmp_rate) < (rate - best_rate)) {
+				best_rate = tmp_rate;
+				best_m = m;
+				is_double = d;
+			}
+		}
+	}
+
+	if (div && half) {
+		*div = best_m;
+		*half = is_double;
+	}
+
+	return best_rate;
+}
+
+static int tcon_ch1_determine_rate(struct clk_hw *hw,
+				   struct clk_rate_request *req)
+{
+	long best_rate = -EINVAL;
+	int i;
+
+	for (i = 0; i < clk_hw_get_num_parents(hw); i++) {
+		unsigned long parent_rate;
+		unsigned long tmp_rate;
+		struct clk_hw *parent;
+
+		parent = clk_hw_get_parent_by_index(hw, i);
+		if (!parent)
+			continue;
+
+		parent_rate = clk_hw_get_rate(parent);
+
+		tmp_rate = tcon_ch1_calc_divider(req->rate, parent_rate,
+						 NULL, NULL);
+
+		if (best_rate < 0 ||
+		    (req->rate - tmp_rate) < (req->rate - best_rate)) {
+			best_rate = tmp_rate;
+			req->best_parent_rate = parent_rate;
+			req->best_parent_hw = parent;
+		}
+	}
+
+	if (best_rate < 0)
+		return best_rate;
+
+	req->rate = best_rate;
+	return 0;
+}
+
+static unsigned long tcon_ch1_recalc_rate(struct clk_hw *hw,
+					  unsigned long parent_rate)
+{
+	struct tcon_ch1_clk *tclk = hw_to_tclk(hw);
+	u32 reg;
+
+	reg = readl(tclk->reg);
+
+	parent_rate /= (reg & TCON_CH1_SCLK2_DIV_MASK) + 1;
+
+	if (reg & TCON_CH1_SCLK1_HALF_BIT)
+		parent_rate /= 2;
+
+	return parent_rate;
+}
+
+static int tcon_ch1_set_rate(struct clk_hw *hw, unsigned long rate,
+			     unsigned long parent_rate)
+{
+	struct tcon_ch1_clk *tclk = hw_to_tclk(hw);
+	unsigned long flags;
+	bool half;
+	u8 div_m;
+	u32 reg;
+
+	tcon_ch1_calc_divider(rate, parent_rate, &div_m, &half);
+
+	spin_lock_irqsave(&tclk->lock, flags);
+	reg = readl(tclk->reg);
+	reg &= ~(TCON_CH1_SCLK2_DIV_MASK | TCON_CH1_SCLK1_HALF_BIT);
+	reg |= (div_m - 1) & TCON_CH1_SCLK2_DIV_MASK;
+
+	if (half)
+		reg |= TCON_CH1_SCLK1_HALF_BIT;
+
+	writel(reg, tclk->reg);
+	spin_unlock_irqrestore(&tclk->lock, flags);	
+
+	return 0;
+}
+
+static const struct clk_ops tcon_ch1_ops = {
+	.disable	= tcon_ch1_disable,
+	.enable		= tcon_ch1_enable,
+	.is_enabled	= tcon_ch1_is_enabled,
+
+	.get_parent	= tcon_ch1_get_parent,
+	.set_parent	= tcon_ch1_set_parent,
+
+	.determine_rate	= tcon_ch1_determine_rate,
+	.recalc_rate	= tcon_ch1_recalc_rate,
+	.set_rate	= tcon_ch1_set_rate,
+};
+
+static void __init tcon_ch1_setup(struct device_node *node)
+{
+	const char *parents[TCON_CH1_SCLK2_PARENTS];
+	const char *clk_name = node->name;
+	struct clk_init_data init;
+	struct tcon_ch1_clk *tclk;
 	struct resource res;
+	struct clk *clk;
 	void __iomem *reg;
 	int ret;
 
-	of_property_read_string(node, "clock-output-names",
-				&sclk1_name);
-
-	sclk2_name = kasprintf(GFP_KERNEL, "%s2", sclk1_name);
-	if (!sclk2_name)
-		return;
+	of_property_read_string(node, "clock-output-names", &clk_name);
 
 	reg = of_io_request_and_map(node, 0, of_node_full_name(node));
 	if (IS_ERR(reg)) {
-		pr_err("%s: Could not map the clock registers\n", sclk2_name);
-		goto err_free_name;
+		pr_err("%s: Could not map the clock registers\n", clk_name);
+		return;
 	}
 
-	ret = of_clk_parent_fill(node, sclk2_parents,
-				 SUN4I_A10_TCON_CH1_SCLK2_PARENTS);
-	if (ret != SUN4I_A10_TCON_CH1_SCLK2_PARENTS) {
-		pr_err("%s Could not retrieve the parents\n", sclk2_name);
+	ret = of_clk_parent_fill(node, parents, TCON_CH1_SCLK2_PARENTS);
+	if (ret != TCON_CH1_SCLK2_PARENTS) {
+		pr_err("%s Could not retrieve the parents\n", clk_name);
 		goto err_unmap;
 	}
 
-	sclk2_mux = kzalloc(sizeof(*sclk2_mux), GFP_KERNEL);
-	if (!sclk2_mux)
+	tclk = kzalloc(sizeof(*tclk), GFP_KERNEL);
+	if (!tclk)
 		goto err_unmap;
 
-	sclk2_mux->reg = reg;
-	sclk2_mux->shift = SUN4I_A10_TCON_CH1_SCLK2_MUX_SHIFT;
-	sclk2_mux->mask = SUN4I_A10_TCON_CH1_SCLK2_MUX_MASK;
-	sclk2_mux->lock = &sun4i_a10_tcon_ch1_lock;
+	init.name = clk_name;
+	init.ops = &tcon_ch1_ops;
+	init.parent_names = parents;
+	init.num_parents = TCON_CH1_SCLK2_PARENTS;
+	init.flags = CLK_SET_RATE_PARENT;
 
-	sclk2_gate = kzalloc(sizeof(*sclk2_gate), GFP_KERNEL);
-	if (!sclk2_gate)
-		goto err_free_sclk2_mux;
+	tclk->reg = reg;
+	tclk->hw.init = &init;
+	spin_lock_init(&tclk->lock);
 
-	sclk2_gate->reg = reg;
-	sclk2_gate->bit_idx = SUN4I_A10_TCON_CH1_SCLK2_GATE_BIT;
-	sclk2_gate->lock = &sun4i_a10_tcon_ch1_lock;
-
-	sclk2_div = kzalloc(sizeof(*sclk2_div), GFP_KERNEL);
-	if (!sclk2_div)
-		goto err_free_sclk2_gate;
-
-	sclk2_div->reg = reg;
-	sclk2_div->shift = SUN4I_A10_TCON_CH1_SCLK2_DIV_SHIFT;
-	sclk2_div->width = SUN4I_A10_TCON_CH1_SCLK2_DIV_WIDTH;
-	sclk2_div->lock = &sun4i_a10_tcon_ch1_lock;
-
-	sclk2 = clk_register_composite(NULL, sclk2_name, sclk2_parents,
-				       SUN4I_A10_TCON_CH1_SCLK2_PARENTS,
-				       &sclk2_mux->hw, &clk_mux_ops,
-				       &sclk2_div->hw, &clk_divider_ops,
-				       &sclk2_gate->hw, &clk_gate_ops,
-				       0);
-	if (IS_ERR(sclk2)) {
-		pr_err("%s: Couldn't register the clock\n", sclk2_name);
-		goto err_free_sclk2_div;
+	clk = clk_register(NULL, &tclk->hw);
+	if (IS_ERR(clk)) {
+		pr_err("%s: Couldn't register the clock\n", clk_name);
+		goto err_free_data;
 	}
 
-	sclk1_div = kzalloc(sizeof(*sclk1_div), GFP_KERNEL);
-	if (!sclk1_div)
-		goto err_free_sclk2;
-
-	sclk1_div->reg = reg;
-	sclk1_div->shift = SUN4I_A10_TCON_CH1_SCLK1_DIV_SHIFT;
-	sclk1_div->width = SUN4I_A10_TCON_CH1_SCLK1_DIV_WIDTH;
-	sclk1_div->lock = &sun4i_a10_tcon_ch1_lock;
-
-	sclk1_gate = kzalloc(sizeof(*sclk1_gate), GFP_KERNEL);
-	if (!sclk1_gate)
-		goto err_free_sclk1_mux;
-
-	sclk1_gate->reg = reg;
-	sclk1_gate->bit_idx = SUN4I_A10_TCON_CH1_SCLK1_GATE_BIT;
-	sclk1_gate->lock = &sun4i_a10_tcon_ch1_lock;
-
-	sclk1 = clk_register_composite(NULL, sclk1_name, &sclk2_name, 1,
-				       NULL, NULL,
-				       &sclk1_div->hw, &clk_divider_ops,
-				       &sclk1_gate->hw, &clk_gate_ops,
-				       0);
-	if (IS_ERR(sclk1)) {
-		pr_err("%s: Couldn't register the clock\n", sclk1_name);
-		goto err_free_sclk1_gate;
+	ret = of_clk_add_provider(node, of_clk_src_simple_get, clk);
+	if (ret) {
+		pr_err("%s: Couldn't register our clock provider\n", clk_name);
+		goto err_unregister_clk;
 	}
-
-	ret = of_clk_add_provider(node, of_clk_src_simple_get, sclk1);
-	if (WARN_ON(ret))
-		goto err_free_sclk1;
 
 	return;
 
-err_free_sclk1:
-	clk_unregister_composite(sclk1);
-err_free_sclk1_gate:
-	kfree(sclk1_gate);
-err_free_sclk1_mux:
-	kfree(sclk1_div);
-err_free_sclk2:
-	clk_unregister(sclk2);
-err_free_sclk2_div:
-	kfree(sclk2_div);
-err_free_sclk2_gate:
-	kfree(sclk2_gate);
-err_free_sclk2_mux:
-	kfree(sclk2_mux);
+err_unregister_clk:
+	clk_unregister(clk);
+err_free_data:
+	kfree(tclk);
 err_unmap:
 	iounmap(reg);
 	of_address_to_resource(node, 0, &res);
 	release_mem_region(res.start, resource_size(&res));
-err_free_name:
-	kfree(sclk2_name);
 }
 
-CLK_OF_DECLARE(sun4i_a10_tcon_ch1, "allwinner,sun4i-a10-tcon-ch1-clk",
-	       sun4i_a10_tcon_ch1_setup);
+CLK_OF_DECLARE(tcon_ch1, "allwinner,sun4i-a10-tcon-ch1-clk",
+	       tcon_ch1_setup);
