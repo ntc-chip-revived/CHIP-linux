@@ -98,12 +98,19 @@ static int cape_ds2431_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static const struct of_device_id capemgr_of_table[] = {
+	{ .compatible = "cape-ds2431" },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, capemgr_of_table);
+
 static struct platform_driver capemgr_driver = {
 	.probe	= cape_ds2431_probe,
 	.remove	= cape_ds2431_remove,
 	.driver	= {
 		.name = "cape-ds2431",
 		.owner = THIS_MODULE,
+		.of_match_table = capemgr_of_table,
 	},
 };
 module_platform_driver(capemgr_driver);
