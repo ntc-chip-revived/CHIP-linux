@@ -127,6 +127,7 @@
 #define SUN4I_TCON_CEU_RANGE_R_REG		0x140
 #define SUN4I_TCON_CEU_RANGE_G_REG		0x144
 #define SUN4I_TCON_CEU_RANGE_B_REG		0x148
+#define SUN4I_TCON_MUX_CTRL_REG			0x200
 #define SUN4I_TCON1_FILL_CTL_REG		0x300
 #define SUN4I_TCON1_FILL_BEG0_REG		0x304
 #define SUN4I_TCON1_FILL_END0_REG		0x308
@@ -156,6 +157,9 @@ struct sun4i_tcon {
 
 	/* Reset control */
 	struct reset_control		*lcd_rst;
+
+	/* Platform adjustments */
+	bool				has_mux;
 
 	struct drm_panel		*panel;
 };

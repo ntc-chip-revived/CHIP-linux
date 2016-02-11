@@ -241,6 +241,12 @@ void sun4i_tcon1_mode_set(struct sun4i_tcon *tcon,
 	regmap_update_bits(tcon->regs, SUN4I_TCON_GCTL_REG,
 			   SUN4I_TCON_GCTL_IOMAP_MASK,
 			   SUN4I_TCON_GCTL_IOMAP_TCON1);
+
+	/*
+	 * FIXME: Undocumented bits
+	 */
+	if (tcon->has_mux)
+		regmap_write(tcon->regs, SUN4I_TCON_MUX_CTRL_REG, 1);
 }
 
 static void sun4i_tcon_finish_page_flip(struct drm_device *dev,
@@ -447,6 +453,9 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 	dev_set_drvdata(dev, tcon);
 	drv->tcon = tcon;
 
+	if (of_device_is_compatible(dev->of_node, "allwinner,sun5i-a13-tcon"))
+		tcon->has_mux = true;
+
 	ret = sun4i_tcon_init_regmap(dev, tcon);
 	if (ret) {
 		dev_err(dev, "Couldn't init our TCON regmap\n");
@@ -542,7 +551,7 @@ static int sun4i_tcon_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id sun4i_tcon_of_table[] = {
-	{ .compatible = "allwinner,sun4i-a10-tcon" },
+	{ .compatible = "allwinner,sun5i-a13-tcon" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sun4i_tcon_of_table);
