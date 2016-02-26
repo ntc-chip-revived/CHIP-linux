@@ -248,7 +248,7 @@ static int sun4i_drv_add_endpoints(struct device *dev,
 		 * component framework
 		 */
 		if (of_property_read_bool(ep, "allwinner,panel"))
-			return 0;
+			continue;
 
 		remote = of_graph_get_remote_port_parent(ep);
 		if (!remote) {
