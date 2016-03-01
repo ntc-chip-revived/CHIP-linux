@@ -12,3 +12,4 @@ install:
 
 script:
 - which arm-linux-gnueabihf-gcc
+- pwd
