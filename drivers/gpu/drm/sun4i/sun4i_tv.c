@@ -24,6 +24,7 @@
 #include "sun4i_backend.h"
 #include "sun4i_drv.h"
 #include "sun4i_tcon.h"
+#include "sun4i_tv.h"
 
 #define SUN4I_TVE_EN_REG		0x000
 #define SUN4I_TVE_EN_DAC_MAP_MASK		GENMASK(19, 4)
@@ -116,57 +117,6 @@
 
 #define SUN4I_TVE_WSS_DATA2_REG		0x244
 
-struct color_gains {
-	u16	cb;
-	u16	cr;
-};
-
-struct burst_levels {
-	u16	cb;
-	u16	cr;
-};
-
-struct video_levels {
-	u16	black;
-	u16	blank;
-};
-
-struct resync_parameters {
-	bool	field;
-	u16	line;
-	u16	pixel;
-};
-
-struct tv_mode {
-	char		*name;
-
-	u32		mode;
-	u32		chroma_freq;
-	u16		back_porch;
-	u16		front_porch;
-	u16		line_number;
-	u16		vblank_level;
-
-	u32		hdisplay;
-	u16		hfront_porch;
-	u16		hsync_len;
-	u16		hback_porch;
-
-	u32		vdisplay;
-	u16		vfront_porch;
-	u16		vsync_len;
-	u16		vback_porch;
-
-	bool		yc_en;
-	bool		dac3_en;
-	bool		dac_bit25_en;
-
-	struct color_gains		*color_gains;
-	struct burst_levels		*burst_levels;
-	struct video_levels		*video_levels;
-	struct resync_parameters	*resync_params;
-};
-
 struct sun4i_tv {
 	struct drm_connector	connector;
 	struct drm_encoder	encoder;
@@ -178,39 +128,39 @@ struct sun4i_tv {
 	struct sun4i_drv	*drv;
 };
 
-struct video_levels ntsc_video_levels = {
+struct sun4i_tv_video_levels ntsc_video_levels = {
 	.black = 282,	.blank = 240,
 };
 
-struct video_levels pal_video_levels = {
+struct sun4i_tv_video_levels pal_video_levels = {
 	.black = 252,	.blank = 252,
 };
 
-struct burst_levels ntsc_burst_levels = {
+struct sun4i_tv_burst_levels ntsc_burst_levels = {
 	.cb = 79,	.cr = 0,
 };
 
-struct burst_levels pal_burst_levels = {
+struct sun4i_tv_burst_levels pal_burst_levels = {
 	.cb = 40,	.cr = 40,
 };
 
-struct color_gains ntsc_color_gains = {
+struct sun4i_tv_color_gains ntsc_color_gains = {
 	.cb = 160,	.cr = 160,
 };
 
-struct color_gains pal_color_gains = {
+struct sun4i_tv_color_gains pal_color_gains = {
 	.cb = 224,	.cr = 224,
 };
 
-struct resync_parameters ntsc_resync_parameters = {
+struct sun4i_tv_resync_parameters ntsc_resync_parameters = {
 	.field = false,	.line = 14,	.pixel = 12,
 };
 
-struct resync_parameters pal_resync_parameters = {
+struct sun4i_tv_resync_parameters pal_resync_parameters = {
 	.field = true,	.line = 13,	.pixel = 12,
 };
 
-struct tv_mode tv_modes[] = {
+struct sun4i_tv_mode tv_modes[] = {
 	{
 		.name		= "NTSC",
 		.mode		= SUN4I_TVE_CFG0_RES_480i,
@@ -289,13 +239,13 @@ drm_connector_to_sun4i_tv(struct drm_connector *connector)
  * So far, it doesn't seem to be preserved when the mode is passed by
  * to mode_set for some reason.
  */
-static struct tv_mode *sun4i_tv_find_tv_by_mode(struct drm_display_mode *mode)
+static struct sun4i_tv_mode *sun4i_tv_find_tv_by_mode(struct drm_display_mode *mode)
 {
 	int i;
 
 	/* First try to identify the mode by name */
 	for (i = 0; i < ARRAY_SIZE(tv_modes); i++) {
-		struct tv_mode *tv_mode = &tv_modes[i];
+		struct sun4i_tv_mode *tv_mode = &tv_modes[i];
 
 		DRM_DEBUG_DRIVER("Comparing mode %s vs %s",
 				 mode->name, tv_mode->name);
@@ -306,7 +256,7 @@ static struct tv_mode *sun4i_tv_find_tv_by_mode(struct drm_display_mode *mode)
 
 	/* Then by number of lines */
 	for (i = 0; i < ARRAY_SIZE(tv_modes); i++) {
-		struct tv_mode *tv_mode = &tv_modes[i];
+		struct sun4i_tv_mode *tv_mode = &tv_modes[i];
 
 		DRM_DEBUG_DRIVER("Comparing mode %s vs %s (X: %d vs %d)",
 				 mode->name, tv_mode->name,
@@ -363,7 +313,7 @@ static void sun4i_tv_mode_set(struct drm_encoder *encoder,
 	struct sun4i_tv *tv = drm_encoder_to_sun4i_tv(encoder);
 	struct sun4i_drv *drv = tv->drv;
 	struct sun4i_tcon *tcon = drv->tcon;
-	struct tv_mode *tv_mode = sun4i_tv_find_tv_by_mode(mode);
+	struct sun4i_tv_mode *tv_mode = sun4i_tv_find_tv_by_mode(mode);
 
 	sun4i_backend_apply_color_correction(drv->backend);
 	sun4i_tcon1_mode_set(tcon, mode);
@@ -486,7 +436,7 @@ static int sun4i_tv_comp_get_modes(struct drm_connector *connector)
 
 	for (i = 0; i < ARRAY_SIZE(tv_modes); i++) {
 		struct drm_display_mode *mode = drm_mode_create(connector->dev);
-		struct tv_mode *tv_mode = &tv_modes[i];
+		struct sun4i_tv_mode *tv_mode = &tv_modes[i];
 
 		DRM_DEBUG_DRIVER("Creating mode %s\n", tv_mode->name);
 
