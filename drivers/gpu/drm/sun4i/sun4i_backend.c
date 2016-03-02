@@ -34,6 +34,8 @@ void sun4i_backend_apply_color_correction(struct sun4i_backend *backend)
 {
 	int i;
 
+	DRM_DEBUG_DRIVER("Applying RGB to YUV color correction\n");
+
 	/* Set color correction */
 	regmap_write(backend->regs, SUN4I_BACKEND_OCCTL_REG,
 		     SUN4I_BACKEND_OCCTL_ENABLE);
@@ -41,6 +43,15 @@ void sun4i_backend_apply_color_correction(struct sun4i_backend *backend)
 	for (i = 0; i < 12; i++)
 		regmap_write(backend->regs, SUN4I_BACKEND_OCRCOEF_REG(i),
 			     sunxi_rgb2yuv_coef[i]);
+}
+
+void sun4i_backend_disable_color_correction(struct sun4i_backend *backend)
+{
+	DRM_DEBUG_DRIVER("Disabling color correction\n");
+
+	/* Disable color correction */
+	regmap_update_bits(backend->regs, SUN4I_BACKEND_OCCTL_REG,
+			   SUN4I_BACKEND_OCCTL_ENABLE, 0);
 }
 
 void sun4i_backend_commit(struct sun4i_backend *backend)

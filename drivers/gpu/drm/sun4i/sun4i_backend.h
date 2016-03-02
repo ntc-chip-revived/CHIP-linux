@@ -149,6 +149,8 @@ struct sun4i_backend {
 };
 
 void sun4i_backend_apply_color_correction(struct sun4i_backend *backend);
+void sun4i_backend_disable_color_correction(struct sun4i_backend *backend);
+
 void sun4i_backend_commit(struct sun4i_backend *backend);
 
 void sun4i_backend_layer_enable(struct sun4i_backend *backend,
