@@ -289,6 +289,7 @@ static void sun4i_tv_disable(struct drm_encoder *encoder)
 	regmap_update_bits(tv->regs, SUN4I_TVE_EN_REG,
 			   SUN4I_TVE_EN_ENABLE,
 			   0);
+	sun4i_backend_disable_color_correction(drv->backend);
 }
 
 static void sun4i_tv_enable(struct drm_encoder *encoder)
