@@ -273,6 +273,14 @@ static int sun4i_tv_atomic_check(struct drm_encoder *encoder,
 				 struct drm_crtc_state *crtc_state,
 				 struct drm_connector_state *conn_state)
 {
+	struct sun4i_tv_mode *tv_mode = sun4i_tv_find_tv_by_mode(&crtc_state->mode);
+	struct sun4i_crtc_state *state = drm_crtc_state_to_sun4i_crtc_state(crtc_state);
+
+	if (!tv_mode)
+		return -EINVAL;
+
+	state->tv_mode = tv_mode;
+
 	return 0;
 }
 
@@ -314,7 +322,11 @@ static void sun4i_tv_mode_set(struct drm_encoder *encoder,
 	struct sun4i_tv *tv = drm_encoder_to_sun4i_tv(encoder);
 	struct sun4i_drv *drv = tv->drv;
 	struct sun4i_tcon *tcon = drv->tcon;
-	struct sun4i_tv_mode *tv_mode = sun4i_tv_find_tv_by_mode(mode);
+	struct sun4i_crtc_state *state;
+	struct sun4i_tv_mode *tv_mode;
+
+	state = drm_crtc_state_to_sun4i_crtc_state(encoder->crtc->state);
+	tv_mode = state->tv_mode;
 
 	sun4i_backend_apply_color_correction(drv->backend);
 	sun4i_tcon1_mode_set(tcon, mode);
