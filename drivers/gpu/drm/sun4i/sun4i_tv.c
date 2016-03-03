@@ -270,6 +270,26 @@ static struct sun4i_tv_mode *sun4i_tv_find_tv_by_mode(struct drm_display_mode *m
 	return NULL;
 }
 
+static void sun4i_tv_mode_to_drm_mode(struct sun4i_tv_mode *tv_mode,
+				      struct drm_display_mode *mode)
+{
+	DRM_DEBUG_DRIVER("Creating mode %s\n", mode->name);
+
+	mode->type = DRM_MODE_TYPE_DRIVER;
+	mode->clock = 13500;
+	mode->flags = DRM_MODE_FLAG_INTERLACE;
+
+	mode->hdisplay = tv_mode->hdisplay;
+	mode->hsync_start = mode->hdisplay + tv_mode->hfront_porch;
+	mode->hsync_end = mode->hsync_start + tv_mode->hsync_len;
+	mode->htotal = mode->hsync_end  + tv_mode->hback_porch;
+
+	mode->vdisplay = tv_mode->vdisplay;
+	mode->vsync_start = mode->vdisplay + tv_mode->vfront_porch;
+	mode->vsync_end = mode->vsync_start + tv_mode->vsync_len;
+	mode->vtotal = mode->vsync_end  + tv_mode->vback_porch;
+}
+
 static int sun4i_tv_atomic_check(struct drm_encoder *encoder,
 				 struct drm_crtc_state *crtc_state,
 				 struct drm_connector_state *conn_state)
@@ -452,23 +472,9 @@ static int sun4i_tv_comp_get_modes(struct drm_connector *connector)
 		struct drm_display_mode *mode = drm_mode_create(connector->dev);
 		struct sun4i_tv_mode *tv_mode = &tv_modes[i];
 
-		DRM_DEBUG_DRIVER("Creating mode %s\n", tv_mode->name);
-
 		strcpy(mode->name, tv_mode->name);
-		mode->type = DRM_MODE_TYPE_DRIVER;
-		mode->clock = 13500;
-		mode->flags = DRM_MODE_FLAG_INTERLACE;
 
-		mode->hdisplay = tv_mode->hdisplay;
-		mode->hsync_start = mode->hdisplay + tv_mode->hfront_porch;
-		mode->hsync_end = mode->hsync_start + tv_mode->hsync_len;
-		mode->htotal = mode->hsync_end  + tv_mode->hback_porch;
-
-		mode->vdisplay = tv_mode->vdisplay;
-		mode->vsync_start = mode->vdisplay + tv_mode->vfront_porch;
-		mode->vsync_end = mode->vsync_start + tv_mode->vsync_len;
-		mode->vtotal = mode->vsync_end  + tv_mode->vback_porch;
-
+		sun4i_tv_mode_to_drm_mode(tv_mode, mode);
 		drm_mode_probed_add(connector, mode);
 	}
 
