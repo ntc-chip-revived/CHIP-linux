@@ -251,7 +251,7 @@ static struct sun4i_tv_mode *sun4i_tv_find_tv_by_mode(struct drm_display_mode *m
 		DRM_DEBUG_DRIVER("Comparing mode %s vs %s",
 				 mode->name, tv_mode->name);
 
-		if (!strcmp(mode->name, tv_mode->name))
+		if (!strncmp(mode->name, tv_mode->name, strlen(tv_mode->name)))
 			return tv_mode;
 	}
 
@@ -271,7 +271,8 @@ static struct sun4i_tv_mode *sun4i_tv_find_tv_by_mode(struct drm_display_mode *m
 }
 
 static void sun4i_tv_mode_to_drm_mode(struct sun4i_tv_mode *tv_mode,
-				      struct drm_display_mode *mode)
+				      struct drm_display_mode *mode,
+				      int overscan)
 {
 	DRM_DEBUG_DRIVER("Creating mode %s\n", mode->name);
 
@@ -279,12 +280,12 @@ static void sun4i_tv_mode_to_drm_mode(struct sun4i_tv_mode *tv_mode,
 	mode->clock = 13500;
 	mode->flags = DRM_MODE_FLAG_INTERLACE;
 
-	mode->hdisplay = tv_mode->hdisplay;
+	mode->hdisplay = tv_mode->hdisplay * (100 - overscan) / 100;
 	mode->hsync_start = mode->hdisplay + tv_mode->hfront_porch;
 	mode->hsync_end = mode->hsync_start + tv_mode->hsync_len;
 	mode->htotal = mode->hsync_end  + tv_mode->hback_porch;
 
-	mode->vdisplay = tv_mode->vdisplay;
+	mode->vdisplay = tv_mode->vdisplay * (100 - overscan) / 100;
 	mode->vsync_start = mode->vdisplay + tv_mode->vfront_porch;
 	mode->vsync_end = mode->vsync_start + tv_mode->vsync_len;
 	mode->vtotal = mode->vsync_end  + tv_mode->vback_porch;
@@ -345,12 +346,16 @@ static void sun4i_tv_mode_set(struct drm_encoder *encoder,
 	struct sun4i_tcon *tcon = drv->tcon;
 	struct sun4i_crtc_state *state;
 	struct sun4i_tv_mode *tv_mode;
+	struct drm_display_mode tv_drm_mode;
 
 	state = drm_crtc_state_to_sun4i_crtc_state(encoder->crtc->state);
 	tv_mode = state->tv_mode;
 
+	sun4i_tv_mode_to_drm_mode(tv_mode, &tv_drm_mode, 0);
+	drm_mode_set_crtcinfo(&tv_drm_mode, CRTC_INTERLACE_HALVE_V);
+
 	sun4i_backend_apply_color_correction(drv->backend);
-	sun4i_tcon1_mode_set(tcon, mode);
+	sun4i_tcon1_mode_set(tcon, &tv_drm_mode);
 
 	/* Enable and map the DAC to the output */
 	regmap_update_bits(tv->regs, SUN4I_TVE_EN_REG,
@@ -469,16 +474,24 @@ static int sun4i_tv_comp_get_modes(struct drm_connector *connector)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(tv_modes); i++) {
-		struct drm_display_mode *mode = drm_mode_create(connector->dev);
 		struct sun4i_tv_mode *tv_mode = &tv_modes[i];
+		int j;
 
-		strcpy(mode->name, tv_mode->name);
+		for (j = 0; j < 20; j += 5) {
+			struct drm_display_mode *mode = drm_mode_create(connector->dev);
 
-		sun4i_tv_mode_to_drm_mode(tv_mode, mode);
-		drm_mode_probed_add(connector, mode);
+			if (j)
+				sprintf(mode->name, "%s%d", tv_mode->name,
+					j);
+			else
+				strcpy(mode->name, tv_mode->name);
+
+			sun4i_tv_mode_to_drm_mode(tv_mode, mode, j);
+			drm_mode_probed_add(connector, mode);
+		}
 	}
 
-	return i;
+	return i * 4;
 }
 
 static int sun4i_tv_comp_mode_valid(struct drm_connector *connector,

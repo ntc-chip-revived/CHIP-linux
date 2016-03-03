@@ -22,7 +22,9 @@
 #include <linux/reset.h>
 
 #include "sun4i_backend.h"
+#include "sun4i_crtc.h"
 #include "sun4i_drv.h"
+#include "sun4i_tv.h"
 
 static u32 sunxi_rgb2yuv_coef[12] = {
 	0x00000107, 0x00000204, 0x00000064, 0x00000108,
@@ -106,15 +108,29 @@ int sun4i_backend_update_layer_coord(struct sun4i_backend *backend,
 {
 	struct drm_plane_state *state = plane->state;
 	struct drm_framebuffer *fb = state->fb;
+	struct sun4i_crtc_state *s_state;
+	struct sun4i_tv_mode *tv_mode;
+	u16 h, w;
+	u16 x, y;
+
+	s_state = drm_crtc_state_to_sun4i_crtc_state(state->crtc->state);
+	tv_mode = s_state->tv_mode;
 
 	DRM_DEBUG_DRIVER("Updating layer %d\n", layer);
 
+	if (tv_mode) {
+		h = tv_mode->vdisplay;
+		w = tv_mode->hdisplay;
+	} else {
+		h = state->crtc_h;
+		w = state->crtc_w;
+	}
+
 	if (plane->type == DRM_PLANE_TYPE_PRIMARY) {
 		DRM_DEBUG_DRIVER("Primary layer, updating global size W: %u H: %u\n",
-				 state->crtc_w, state->crtc_h);
+				 w, h);
 		regmap_write(backend->regs, SUN4I_BACKEND_DISSIZE_REG,
-			     SUN4I_BACKEND_DISSIZE(state->crtc_w,
-						   state->crtc_h));
+			     SUN4I_BACKEND_DISSIZE(w, h));
 	}
 
 	/* Set the line width */
@@ -130,11 +146,12 @@ int sun4i_backend_update_layer_coord(struct sun4i_backend *backend,
 					   state->crtc_h));
 
 	/* Set base coordinates */
+	x = (w - state->crtc_w) / 2 + state->crtc_x;
+	y = (h - state->crtc_h) / 2 + state->crtc_y;
 	DRM_DEBUG_DRIVER("Layer coordinates X: %d Y: %d\n",
-			 state->crtc_x, state->crtc_y);
+			 x, y);
 	regmap_write(backend->regs, SUN4I_BACKEND_LAYCOOR_REG(layer),
-		     SUN4I_BACKEND_LAYCOOR(state->crtc_x,
-					   state->crtc_y));
+		     SUN4I_BACKEND_LAYCOOR(x, y));
 
 	return 0;
 }
