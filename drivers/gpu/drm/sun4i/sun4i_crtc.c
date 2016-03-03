@@ -84,9 +84,32 @@ static const struct drm_crtc_helper_funcs sun4i_crtc_helper_funcs = {
 	.enable		= sun4i_crtc_enable,
 };
 
+struct drm_crtc_state *sun4i_crtc_duplicate_state(struct drm_crtc *crtc)
+{
+	struct sun4i_crtc_state *state = drm_crtc_state_to_sun4i_crtc_state(crtc->state);
+	struct sun4i_crtc_state *copy;
+
+	copy = kmalloc(sizeof(*copy), GFP_KERNEL);
+	if (!copy)
+		return NULL;
+
+	__drm_atomic_helper_crtc_duplicate_state(crtc, &copy->base);
+
+	return &copy->base;
+}
+
+void sun4i_crtc_destroy_state(struct drm_crtc *crtc,
+			      struct drm_crtc_state *c_state)
+{
+	struct sun4i_crtc_state *s_state = drm_crtc_state_to_sun4i_crtc_state(c_state);
+
+	__drm_atomic_helper_crtc_destroy_state(crtc, c_state);
+	kfree(s_state);
+}
+
 static const struct drm_crtc_funcs sun4i_crtc_funcs = {
-	.atomic_destroy_state	= drm_atomic_helper_crtc_destroy_state,
-	.atomic_duplicate_state	= drm_atomic_helper_crtc_duplicate_state,
+	.atomic_destroy_state	= sun4i_crtc_destroy_state,
+	.atomic_duplicate_state	= sun4i_crtc_duplicate_state,
 	.destroy		= drm_crtc_cleanup,
 	.page_flip		= drm_atomic_helper_page_flip,
 	.reset			= drm_atomic_helper_crtc_reset,
