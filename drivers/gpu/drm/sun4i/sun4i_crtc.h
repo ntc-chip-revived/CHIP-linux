@@ -20,8 +20,11 @@ struct sun4i_crtc {
 	struct sun4i_drv		*drv;
 };
 
+struct sun4i_tv_mode;
+
 struct sun4i_crtc_state {
 	struct drm_crtc_state	base;
+	struct sun4i_tv_mode	*tv_mode;
 };
 
 static inline struct sun4i_crtc *drm_crtc_to_sun4i_crtc(struct drm_crtc *crtc)

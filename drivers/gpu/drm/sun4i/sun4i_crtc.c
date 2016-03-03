@@ -95,6 +95,8 @@ struct drm_crtc_state *sun4i_crtc_duplicate_state(struct drm_crtc *crtc)
 
 	__drm_atomic_helper_crtc_duplicate_state(crtc, &copy->base);
 
+	copy->tv_mode = NULL;
+
 	return &copy->base;
 }
 

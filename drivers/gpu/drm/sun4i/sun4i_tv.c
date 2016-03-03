@@ -22,6 +22,7 @@
 #include <drm/drm_panel.h>
 
 #include "sun4i_backend.h"
+#include "sun4i_crtc.h"
 #include "sun4i_drv.h"
 #include "sun4i_tcon.h"
 #include "sun4i_tv.h"
