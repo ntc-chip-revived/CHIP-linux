@@ -6,10 +6,10 @@
  * warranty of any kind, whether express or implied.
  */
 
-#ifndef __CAPE_MANAGER_H
-#define __CAPE_MANAGER_H
+#ifndef __DIP_MANAGER_H
+#define __DIP_MANAGER_H
 
-struct cape_header {
+struct dip_header {
         u32     magic;                  /* rsvd */
         u8      version;                /* spec version */
         u32     vendor_id;
@@ -18,9 +18,9 @@ struct cape_header {
         char    vendor_name[32];
         char    product_name[32];
         u8      rsvd[36];               /* rsvd for futre spec versions */
-        u8      data[16];               /* user data, per-cape specific */
+        u8      data[16];               /* user data, per-DIP specific */
 } __packed;
 
-void cape_manager_insert(struct device *dev, struct cape_header *header);
+void dip_manager_insert(struct device *dev, struct dip_header *header);
 
 #endif

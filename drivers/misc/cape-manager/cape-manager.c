@@ -13,7 +13,7 @@
 #include <linux/of_fdt.h>
 #include <linux/slab.h>
 
-#include "cape-manager.h"
+#include <linux/dip-manager.h>
 
 LIST_HEAD(cape_list);
 DEFINE_SPINLOCK(cape_lock);
@@ -146,7 +146,7 @@ err:
  * Called by an id provider when a new id is detected. The id is stored and an
  * overlay is applied if it matches the id.
  */
-void cape_manager_insert(struct device *dev, struct cape_header *header)
+void dip_manager_insert(struct device *dev, struct dip_header *header)
 {
 	struct list_head *pos, *n;
 	struct cape *cape;
@@ -205,4 +205,4 @@ void cape_manager_insert(struct device *dev, struct cape_header *header)
 err:
 	spin_unlock(&cape_lock);
 }
-EXPORT_SYMBOL_GPL(cape_manager_insert);
+EXPORT_SYMBOL_GPL(dip_manager_insert);
