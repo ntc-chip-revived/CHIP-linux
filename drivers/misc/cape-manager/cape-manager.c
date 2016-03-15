@@ -15,10 +15,10 @@
 
 #include <linux/dip-manager.h>
 
-LIST_HEAD(cape_list);
-DEFINE_SPINLOCK(cape_lock);
+LIST_HEAD(dip_list);
+DEFINE_SPINLOCK(dip_lock);
 
-#define CAPE_MANAGER_MAGIC	0x43484950
+#define DIP_MANAGER_MAGIC	0x43484950
 
 #define dip_convert(field)					\
 	(							\
@@ -28,10 +28,10 @@ DEFINE_SPINLOCK(cape_lock);
 		-1						\
 	)
 
-struct cape {
+struct dip {
 	struct list_head	head;
 
-	struct cape_header	*header;
+	struct dip_header	*header;
 
 	unsigned int		loaded:1;
 
@@ -41,16 +41,16 @@ struct cape {
 	int			overlay_id;
 };
 
-static int cape_manager_check_overlay(struct device *dev, struct cape *cape)
+static int dip_manager_check_overlay(struct device *dev, struct dip *dip)
 {
 	 struct property *p;
 	 const char *s = NULL;
 	 bool compatible = false;
 
-	 p = of_find_property(cape->overlay, "compatible", NULL);
+	 p = of_find_property(dip->overlay, "compatible", NULL);
 	 if (!p) {
 		dev_err(dev, "Missing compatible property in %s\n",
-			 cape->dtbo);
+			 dip->dtbo);
 		return -EINVAL;
 	 }
 
@@ -70,75 +70,75 @@ static int cape_manager_check_overlay(struct device *dev, struct cape *cape)
 	return 0;
 }
 
-static int cape_manager_load(struct device *dev, struct cape *cape)
+static int dip_manager_load(struct device *dev, struct dip *dip)
 {
 	int err;
 	char *dtbo;
 
-	if (cape->loaded) {
-		dev_err(dev, "Overlay already loaded for cape %s\n",
-			cape->header->product_name);
+	if (dip->loaded) {
+		dev_err(dev, "Overlay already loaded for dip %s\n",
+			dip->header->product_name);
 		return -EAGAIN;
 	}
 
 	dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x-%x.dtbo",
-			 dip_convert(cape->header->vendor_id),
-			 dip_convert(cape->header->product_id),
-			 dip_convert(cape->header->product_version));
+			 dip_convert(dip->header->vendor_id),
+			 dip_convert(dip->header->product_id),
+			 dip_convert(dip->header->product_version));
 	if (!dtbo)
 		return -ENOMEM;
 
 	/* First try to request the overlay specific to the version */
-	err = request_firmware_direct(&cape->fw, dtbo, dev);
+	err = request_firmware_direct(&dip->fw, dtbo, dev);
 	if (err) {
 		/* If it fails, try with a generic one */
 		kfree(dtbo);
 
 		dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x.dtbo",
-				 dip_convert(cape->header->vendor_id),
-				 dip_convert(cape->header->product_id));
-		err = request_firmware_direct(&cape->fw, dtbo, dev);
+				 dip_convert(dip->header->vendor_id),
+				 dip_convert(dip->header->product_id));
+		err = request_firmware_direct(&dip->fw, dtbo, dev);
 		if (err) {
-			dev_err(dev, "Could not find overlay %s for cape %s\n",
-				dtbo, cape->header->product_name);
+			dev_err(dev, "Could not find overlay %s for dip %s\n",
+				dtbo, dip->header->product_name);
 			return err;
 		}
 	}
-	cape->dtbo = dtbo;
+	dip->dtbo = dtbo;
 
-	of_fdt_unflatten_tree((unsigned long *)cape->fw->data, &cape->overlay);
-	if (!cape->overlay) {
-		dev_err(dev, "Could not unflatten %s\n", cape->dtbo);
+	of_fdt_unflatten_tree((unsigned long *)dip->fw->data, &dip->overlay);
+	if (!dip->overlay) {
+		dev_err(dev, "Could not unflatten %s\n", dip->dtbo);
 		err = -EINVAL;
 		goto err;
 	}
 
-	of_node_set_flag(cape->overlay, OF_DETACHED);
+	of_node_set_flag(dip->overlay, OF_DETACHED);
 
-	err = of_resolve_phandles(cape->overlay);
+	err = of_resolve_phandles(dip->overlay);
 	if (err) {
 		dev_err(dev, "Could not resolve phandles for overlay %s (%d)\n",
-			cape->dtbo, err);
+			dip->dtbo, err);
 		goto err;
 	}
 
-	if (cape_manager_check_overlay(dev, cape))
+	if (dip_manager_check_overlay(dev, dip))
 		goto err;
 
-	cape->overlay_id = of_overlay_create(cape->overlay);
-	if (cape->overlay_id < 0) {
-		dev_err(dev, "Could not apply overlay %s for cape %s\n",
-			cape->dtbo, cape->header->product_name);
-		err = cape->overlay_id;
+	dip->overlay_id = of_overlay_create(dip->overlay);
+	if (dip->overlay_id < 0) {
+		dev_err(dev, "Could not apply overlay %s for dip %s\n",
+			dip->dtbo, dip->header->product_name);
+		err = dip->overlay_id;
 		goto err;
 	}
 
-	cape->loaded = 1;
+	dip->loaded = 1;
 	return 0;
 
 err:
-	cape->overlay = NULL;
-	release_firmware(cape->fw);
+	dip->overlay = NULL;
+	release_firmware(dip->fw);
 	return err;
 }
 
@@ -149,9 +149,9 @@ err:
 void dip_manager_insert(struct device *dev, struct dip_header *header)
 {
 	struct list_head *pos, *n;
-	struct cape *cape;
+	struct dip *dip;
 
-	if (dip_convert(header->magic) != CAPE_MANAGER_MAGIC) {
+	if (dip_convert(header->magic) != DIP_MANAGER_MAGIC) {
 		dev_err(dev, "Bad magic value (%x)\n",
 			dip_convert(header->magic));
 		return;
@@ -172,37 +172,37 @@ void dip_manager_insert(struct device *dev, struct dip_header *header)
 	pr_err("product name: %s\n", header->product_name);
 #endif
 
-	spin_lock(&cape_lock);
+	spin_lock(&dip_lock);
 
-	list_for_each_safe(pos, n, &cape_list) {
-		cape = list_entry(pos, struct cape, head);
+	list_for_each_safe(pos, n, &dip_list) {
+		dip = list_entry(pos, struct dip, head);
 
-		if (dip_convert(cape->header->vendor_id) == dip_convert(header->vendor_id) &&
-		    dip_convert(cape->header->product_id) == dip_convert(header->product_id) &&
-		    dip_convert(cape->header->product_version) == dip_convert(header->product_version)) {
-			dev_err(dev, "Cape already loaded\n");
+		if (dip_convert(dip->header->vendor_id) == dip_convert(header->vendor_id) &&
+		    dip_convert(dip->header->product_id) == dip_convert(header->product_id) &&
+		    dip_convert(dip->header->product_version) == dip_convert(header->product_version)) {
+			dev_err(dev, "Dip already loaded\n");
 			goto err;
 		}
 	}
 
-	cape = devm_kzalloc(dev, sizeof(*cape), GFP_KERNEL);
-	if (!cape)
+	dip = devm_kzalloc(dev, sizeof(*dip), GFP_KERNEL);
+	if (!dip)
 		goto err;
 
-	cape->loaded = 0;
-	cape->header = header;
+	dip->loaded = 0;
+	dip->header = header;
 
-	if (cape_manager_load(dev, cape)) {
-		dev_err(dev, "Couldn't load cape %s\n", header->product_name);
+	if (dip_manager_load(dev, dip)) {
+		dev_err(dev, "Couldn't load dip %s\n", header->product_name);
 		goto err;
 	}
 
-	list_add_tail(&cape->head, &cape_list);
+	list_add_tail(&dip->head, &dip_list);
 
-	dev_info(dev, "Overlay %s for cape %s applied!\n", cape->dtbo,
+	dev_info(dev, "Overlay %s for dip %s applied!\n", dip->dtbo,
 		 header->product_name);
 
 err:
-	spin_unlock(&cape_lock);
+	spin_unlock(&dip_lock);
 }
 EXPORT_SYMBOL_GPL(dip_manager_insert);
