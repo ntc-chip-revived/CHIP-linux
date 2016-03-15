@@ -19,6 +19,7 @@ LIST_HEAD(dip_list);
 DEFINE_SPINLOCK(dip_lock);
 
 #define DIP_MANAGER_MAGIC	0x43484950
+#define DIP_FIRMWARE_PREFIX	"nextthingco/chip/"
 
 #define dip_convert(field)					\
 	(							\
@@ -81,7 +82,7 @@ static int dip_manager_load(struct device *dev, struct dip *dip)
 		return -EAGAIN;
 	}
 
-	dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x-%x.dtbo",
+	dtbo = kasprintf(GFP_KERNEL, DIP_FIRMWARE_PREFIX "dip-%x-%x-%x.dtbo",
 			 dip_convert(dip->header->vendor_id),
 			 dip_convert(dip->header->product_id),
 			 dip_convert(dip->header->product_version));
@@ -94,7 +95,7 @@ static int dip_manager_load(struct device *dev, struct dip *dip)
 		/* If it fails, try with a generic one */
 		kfree(dtbo);
 
-		dtbo = kasprintf(GFP_KERNEL, "cape-%x-%x.dtbo",
+		dtbo = kasprintf(GFP_KERNEL, DIP_FIRMWARE_PREFIX "dip-%x-%x.dtbo",
 				 dip_convert(dip->header->vendor_id),
 				 dip_convert(dip->header->product_id));
 		err = request_firmware_direct(&dip->fw, dtbo, dev);
