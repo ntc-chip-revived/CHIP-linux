@@ -16,6 +16,8 @@
 #include <linux/types.h>
 #include <linux/delay.h>
 
+#include <linux/dip-manager.h>
+
 #include "../w1.h"
 #include "../w1_int.h"
 #include "../w1_family.h"

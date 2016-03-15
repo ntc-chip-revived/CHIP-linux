@@ -8,7 +8,7 @@ menuconfig CAPE_MANAGER
 if CAPE_MANAGER
 
 config CAPE_DS2431
-	tristate "ID on the DS2431 EEPROM"
+	bool "ID on the DS2431 EEPROM"
 	depends on W1
 	help
 	  Pouet.
