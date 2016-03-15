@@ -65,10 +65,6 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	cape {
-		compatible = "cape-ds2431";
-	};
-
 	leds {
 		compatible = "gpio-leds";
 
