@@ -257,6 +257,78 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c1_pins_a>;
 	status = "okay";
+
+	/* keyboard scanner */
+        tca8418@34 {
+                compatible = "ti,tca8418";
+                reg = <0x34>;
+                /* the interrupt is specified as:
+                        The first cell is the number of the bank
+                        The second cell is the interrupt inside that bank
+                        The third cell is used to specify flags
+                */
+                interrupt-parent = <&pio>;
+                interrupts = <6 1 IRQ_TYPE_EDGE_FALLING>;    /* AP-EINT1 */
+                keypad,num-rows = <6>;
+                keypad,num-columns = <10>;
+                keypad,autorepeat;
+                linux,keymap = <
+                        0x00000002
+                        0x00010003
+                        0x00020004
+                        0x00030005
+                        0x00040006
+                        0x00050007
+                        0x00060008
+                        0x00070009
+                        0x0008000a
+                        0x0009000b
+                        0x01000010
+                        0x01010011
+                        0x01020012
+                        0x01030013
+                        0x01040014
+                        0x01050015
+                        0x01060016
+                        0x01070017
+                        0x01080018
+                        0x01090019
+                        0x0200001e
+                        0x0201001f
+                        0x02020020
+                        0x02030021
+                        0x02040022
+                        0x02050023
+                        0x02060024
+                        0x02070025
+                        0x02080026
+                        0x0209001c
+                        0x0300002a
+                        0x0301002c
+                        0x0302002d
+                        0x0303002e
+                        0x0304002f
+                        0x03050030
+                        0x03060031
+                        0x03070032
+                        0x03080067
+                        0x0309006c
+                        0x0400001d
+                        0x04010064
+                        0x04020038
+                        0x04030039
+                        0x0404000f
+                        0x04050035
+                        0x04060036
+                        0x04080069
+                        0x0409006a
+                        0x05000029
+                        0x0501004a
+                        0x0502004e
+                        0x0503000e
+                        0x05040034
+                >;
+        };
 };
 
 &i2c2 {
@@ -344,34 +416,43 @@
 
 &pio {
 	chip_vbus_pin: chip_vbus_pin@0 {
-	        allwinner,pins = "PB10";
-	        allwinner,function = "gpio_out";
-	        allwinner,drive = <SUN4I_PINCTRL_10_MA>;
-	        allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
+		allwinner,pins = "PB10";
+		allwinner,function = "gpio_out";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
 	};
 
 	chip_wifi_reg_on_pin: chip_wifi_reg_on_pin@0 {
-	        allwinner,pins = "PC19";
-	        allwinner,function = "gpio_out";
-	        allwinner,drive = <SUN4I_PINCTRL_10_MA>;
-	        allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
+		allwinner,pins = "PC19";
+		allwinner,function = "gpio_out";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
 	};
 
 	chip_id_det_pin: chip_id_det_pin@0 {
-	        allwinner,pins = "PG2";
-	        allwinner,function = "gpio_in";
-	        allwinner,drive = <SUN4I_PINCTRL_10_MA>;
-	        allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
+		allwinner,pins = "PG2";
+		allwinner,function = "gpio_in";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
 	};
 
 	chip_w1_pin: chip_w1_pin@0 {
 		allwinner,pins = "PD2";
 		allwinner,function = "gpio_in";
-	        allwinner,drive = <SUN4I_PINCTRL_10_MA>;
-	        allwinner,pull = <SUN4I_PINCTRL_PULL_UP>;
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_PULL_UP>;
 	};
 };
 
+&rtp {
+        allwinner,ts-attached;
+};
+
+&pwm {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm0_pins>;
+	status = "okay";
+};
 &uart1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart1_pins_b>;
@@ -399,4 +480,38 @@
 
 	usb0_vbus-supply = <&usb0_vbus>;
 	usb1_vbus-supply = <&vcc_5v0>;
+};
+
+&pio {
+	st7565_pins: st7565_pins@0 {
+		allwinner,pins = "PE5", "PE6";
+		allwinner,function = "gpio_out";
+		allwinner,drive = <SUN4I_PINCTRL_10_MA>;
+		allwinner,pull = <SUN4I_PINCTRL_NO_PULL>;
+	};
+};
+
+&spi2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi2_pins_a>,
+		    <&spi2_cs0_pins_a>;
+	status = "okay";
+	st7565: st7565@0{
+		compatible = "fb_st7565";
+		reg = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&st7565_pins>;
+
+		spi-max-frequency = <16000000>;
+		/* spi-cpol;
+		spi-cpha;
+		rotate = <270>;
+		bgr;
+		fps = <50>;
+		startbyte = <0x70>;*/
+		buswidth = <8>;
+		dc-gpios = <&pio 4 6 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 4 5 GPIO_ACTIVE_HIGH>;
+		debug = <0>;
+	};
 };
