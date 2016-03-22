@@ -207,7 +207,7 @@
 		};
 	};
 
-	display-engine {
+	de: display-engine {
 		compatible = "allwinner,sun5i-a13-display-engine";
 		allwinner,pipelines = <&fe0>;
 	};
