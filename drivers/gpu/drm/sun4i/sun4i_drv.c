@@ -12,6 +12,7 @@
 
 #include <linux/component.h>
 #include <linux/of_graph.h>
+#include <linux/of_reserved_mem.h>
 
 #include <drm/drmP.h>
 #include <drm/drm_crtc_helper.h>
@@ -127,6 +128,10 @@ static int sun4i_drv_bind(struct device *dev)
 	if (ret)
 		goto free_drm;
 
+	ret = of_reserved_mem_device_init(dev);
+	if (ret)
+		goto free_drm;
+
 	drv = devm_kzalloc(dev, sizeof(*drv), GFP_KERNEL);
 	if (!drv) {
 		ret = -ENOMEM;
@@ -200,6 +205,7 @@ static void sun4i_drv_unbind(struct device *dev)
 	drm_kms_helper_poll_fini(drm);
 	sun4i_framebuffer_free(drm);
 	drm_vblank_cleanup(drm);
+	of_reserved_mem_device_release(dev);
 	drm_dev_unref(drm);
 }
 
