@@ -969,8 +969,14 @@ static int sunxi_nfc_hw_ecc_read_chunk(struct mtd_info *mtd,
 		ret = nand_check_erased_ecc_chunk(data,	ecc->size,
 						  oob, ecc->bytes + 4,
 						  NULL, 0, ecc->strength);
-		if (ret >= 0)
+		if (ret >= 0) {
+			pr_info("%s:%i %d bitflips found in an erased chunk\n",
+				__func__, __LINE__, ret);
 			raw_mode = 1;
+		} else {
+			pr_info("%s:%i uncorrectable bitflips (ret = %d)\n",
+				__func__, __LINE__, ret);
+		}
 	} else {
 		memcpy_fromio(data, nfc->regs + NFC_RAM0_BASE, ecc->size);
 
