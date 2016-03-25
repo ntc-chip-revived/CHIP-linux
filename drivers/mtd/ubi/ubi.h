@@ -193,6 +193,7 @@ struct ubi_leb_desc {
  * @u.list: link in the protection queue
  * @ec: erase counter
  * @pnum: physical eraseblock number
+ * @rc: number reads since last erasure
  *
  * This data structure is used in the WL sub-system. Each physical eraseblock
  * has a corresponding &struct wl_entry object which may be kept in different
@@ -205,6 +206,9 @@ struct ubi_wl_entry {
 	} u;
 	int ec;
 	int pnum;
+#ifdef CONFIG_MTD_UBI_READ_COUNTER
+	unsigned int rc;
+#endif
 };
 
 /**
@@ -967,6 +971,7 @@ int ubi_wl_put_fm_peb(struct ubi_device *ubi, struct ubi_wl_entry *used_e,
 void ubi_refill_pools(struct ubi_device *ubi);
 int ubi_ensure_anchor_pebs(struct ubi_device *ubi);
 int ubi_bitflip_check(struct ubi_device *ubi, int pnum, int force_scrub);
+void ubi_wl_update_rc(struct ubi_device *ubi, int pnum);
 
 /* work.c */
 int ubi_thread(void *u);
