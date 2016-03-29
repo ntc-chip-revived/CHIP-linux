@@ -807,16 +807,14 @@ static void sunxi_nfc_hw_ecc_update_stats(struct mtd_info *mtd,
 }
 
 static int sunxi_nfc_hw_ecc_correct(struct mtd_info *mtd, u8 *data, u8 *oob,
-				    int step, bool *erased)
+				    int step, u32 status, bool *erased)
 {
 	struct nand_chip *nand = mtd->priv;
 	struct sunxi_nfc *nfc = to_sunxi_nfc(nand->controller);
 	struct nand_ecc_ctrl *ecc = &nand->ecc;
-	u32 status, tmp;
+	u32 tmp;
 
 	*erased = false;
-
-	status = readl(nfc->regs + NFC_REG_ECC_ST);
 
 	if (status & NFC_ECC_ERR(step))
 		return -EBADMSG;
@@ -882,7 +880,9 @@ static int sunxi_nfc_hw_ecc_read_chunk(struct mtd_info *mtd,
 
 	*cur_off = oob_off + ecc->bytes + 4;
 
-	ret = sunxi_nfc_hw_ecc_correct(mtd, data, oob, 0, &erased);
+	ret = sunxi_nfc_hw_ecc_correct(mtd, data, oob, 0,
+				       readl(nfc->regs + NFC_REG_ECC_ST),
+				       &erased);
 	if (erased)
 		return 1;
 
