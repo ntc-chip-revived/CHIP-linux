@@ -155,6 +155,7 @@
 
 /* define bit use in NFC_ECC_ST */
 #define NFC_ECC_ERR(x)		BIT(x)
+#define NFC_ECC_ERR_MSK		GENMASK(15, 0)
 #define NFC_ECC_PAT_FOUND(x)	BIT(x + 16)
 #define NFC_ECC_ERR_CNT(b, x)	(((x) >> (((b) % 4) * 8)) & 0xff)
 
@@ -1019,11 +1020,13 @@ static int sunxi_nfc_hw_ecc_read_chunks_dma(struct mtd_info *mtd, uint8_t *buf,
 					    int nchunks)
 {
 	struct nand_chip *nand = mtd->priv;
+	bool randomized = nand->options & NAND_NEED_SCRAMBLING;
 	struct sunxi_nfc *nfc = to_sunxi_nfc(nand->controller);
 	struct nand_ecc_ctrl *ecc = &nand->ecc;
 	unsigned int max_bitflips = 0;
 	int ret, i, raw_mode = 0;
 	struct sg_table sgt;
+	u32 status;
 
 	ret = sunxi_nfc_wait_cmd_fifo_empty(nfc);
 	if (ret)
@@ -1058,23 +1061,53 @@ static int sunxi_nfc_hw_ecc_read_chunks_dma(struct mtd_info *mtd, uint8_t *buf,
 	if (ret)
 		return ret;
 
+	status = readl(nfc->regs + NFC_REG_ECC_ST);
+
 	for (i = 0; i < nchunks; i++) {
 		int data_off = i * ecc->size;
 		int oob_off = i * (ecc->bytes + 4);
 		u8 *data = buf + data_off;
 		u8 *oob = nand->oob_poi + oob_off;
-		bool randomized = nand->options & NAND_NEED_SCRAMBLING;
 		bool erased;
 
 		ret = sunxi_nfc_hw_ecc_correct(mtd, randomized ? data : NULL,
-				(randomized && oob_required) ? oob : NULL,
-				i, &erased);
-		if (ret < 0) {
+					       oob_required ? oob : NULL,
+					       i, status, &erased);
+
+		/* ECC errors are handled in the second loop. */
+		if (ret < 0)
+			continue;
+
+		if (oob_required && !erased) {
+			/* TODO: use DMA to retrieve OOB */
+			nand->cmdfunc(mtd, NAND_CMD_RNDOUT, oob_off, -1);
+			nand->read_buf(mtd, oob, ecc->bytes + 4);
+
+			sunxi_nfc_hw_ecc_get_prot_oob_bytes(mtd, oob, i,
+							    !i, page);
+		}
+
+		if (erased)
+			raw_mode = 1;
+
+		sunxi_nfc_hw_ecc_update_stats(mtd, &max_bitflips, ret);
+	}
+
+	if (status & NFC_ECC_ERR_MSK) {
+		for (i = 0; i < nchunks; i++) {
+			int data_off = i * ecc->size;
+			int oob_off = i * (ecc->bytes + 4);
+			u8 *data = buf + data_off;
+			u8 *oob = nand->oob_poi + oob_off;
+
+			if (!(status & NFC_ECC_ERR(i)))
+				continue;
+
 			/*
 			 * Re-read the data with the randomizer disabled to
 			 * identify bitflips in erased pages.
 			 */
-			if (nand->options & NAND_NEED_SCRAMBLING) {
+			if (randomized) {
 				/* TODO: use DMA to read page in raw mode */
 				nand->cmdfunc(mtd, NAND_CMD_RNDOUT,
 					      data_off, -1);
@@ -1091,19 +1124,9 @@ static int sunxi_nfc_hw_ecc_read_chunks_dma(struct mtd_info *mtd, uint8_t *buf,
 							  ecc->strength);
 			if (ret >= 0)
 				raw_mode = 1;
-		} else if (oob_required && !erased) {
-			/* TODO: use DMA to retrieve OOB */
-			nand->cmdfunc(mtd, NAND_CMD_RNDOUT, oob_off, -1);
-			nand->read_buf(mtd, oob, ecc->bytes + 4);
 
-			sunxi_nfc_hw_ecc_get_prot_oob_bytes(mtd, oob, i,
-							    !i, page);
+			sunxi_nfc_hw_ecc_update_stats(mtd, &max_bitflips, ret);
 		}
-
-		if (erased)
-			raw_mode = 1;
-
-		sunxi_nfc_hw_ecc_update_stats(mtd, &max_bitflips, ret);
 	}
 
 	if (oob_required)
@@ -2144,7 +2167,7 @@ static int sunxi_nfc_probe(struct platform_device *pdev)
 		goto out_mod_clk_unprepare;
 
 	nfc->dmac = dma_request_slave_channel(dev, "rxtx");
-	if (!IS_ERR(nfc->dmac)) {
+	if (nfc->dmac) {
 		struct dma_slave_config dmac_cfg = { };
 		struct sun4i_dma_chan_config dmac_scfg = { };
 
@@ -2162,7 +2185,6 @@ static int sunxi_nfc_probe(struct platform_device *pdev)
 		sun4i_dma_set_chan_config(nfc->dmac, &dmac_scfg);
 	} else {
 		dev_warn(dev, "failed to request rxtx DMA channel\n");
-		nfc->dmac = NULL;
 	}
 
 	platform_set_drvdata(pdev, nfc);
