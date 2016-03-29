@@ -385,7 +385,7 @@ retry:
 		return -EIO;
 	}
 
-	err = ubi_self_check_all_ff(ubi, pnum, 0, ubi->peb_size);
+	err = ubi_self_check_all_ff(ubi, pnum, 0, ubi->usable_peb_size);
 	if (err)
 		return err;
 
