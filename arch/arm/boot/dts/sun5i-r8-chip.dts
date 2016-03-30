@@ -340,3 +340,13 @@
 	usb0_vbus-supply = <&reg_usb0_vbus>;
 	usb1_vbus-supply = <&reg_vcc5v0>;
 };
+
+
+&lradc {
+	compatible = "allwinner,sun4i-a10-lradc";
+	vref-supply = <&reg_vcc3v0>;
+	#io-channel-cells = <1>;
+
+	status = "okay";
+};
+
