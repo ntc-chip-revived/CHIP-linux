@@ -126,7 +126,7 @@ void sun4i_tcon0_mode_set(struct sun4i_tcon *tcon,
 	u32 val = 0;
 
 	/* Adjust clock delay */
-	clk_delay = sun4i_tcon_get_clk_delay(mode, 1);
+	clk_delay = sun4i_tcon_get_clk_delay(mode, 0);
 	regmap_update_bits(tcon->regs, SUN4I_TCON0_CTL_REG,
 			   SUN4I_TCON0_CTL_CLK_DELAY_MASK,
 			   SUN4I_TCON0_CTL_CLK_DELAY(clk_delay));
