@@ -432,6 +432,40 @@ static struct drm_panel *sun4i_tcon_find_panel(struct device_node *node)
 	return of_drm_find_panel(remote);
 }
 
+static struct drm_bridge *sun4i_tcon_find_bridge(struct device_node *node)
+{
+	struct device_node *port, *remote, *child;
+	struct device_node *end_node = NULL;
+
+	/* Inputs are listed first, then outputs */
+	port = of_graph_get_port_by_id(node, 1);
+
+	/*
+	 * Our first output is the RGB interface where the panel will
+	 * be connected.
+	 */
+	for_each_child_of_node(port, child) {
+		u32 reg;
+
+		of_property_read_u32(child, "reg", &reg);
+		if (reg == 0)
+			end_node = child;
+	}
+
+	if (!end_node) {
+		DRM_DEBUG_DRIVER("Missing bridge endpoint\n");
+		return NULL;
+	}
+
+	remote = of_graph_get_remote_port_parent(end_node);
+	if (!remote) {
+		DRM_DEBUG_DRIVER("Enable to parse remote node\n");
+		return NULL;
+	}
+
+	return of_drm_find_bridge(remote);
+}
+
 static int sun4i_tcon_bind(struct device *dev, struct device *master,
 			   void *data)
 {
@@ -485,8 +519,9 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 	}
 
 	tcon->panel = sun4i_tcon_find_panel(dev->of_node);
-	if (!tcon->panel) {
-		dev_info(dev, "No panel found... RGB output disabled\n");
+	tcon->bridge = sun4i_tcon_find_bridge(dev->of_node);
+	if (!tcon->panel && !tcon->bridge) {
+		dev_info(dev, "No panel or bridge found... RGB output disabled\n");
 		return 0;
 	}
 
@@ -517,10 +552,11 @@ static int sun4i_tcon_probe(struct platform_device *pdev)
 	struct device_node *node = pdev->dev.of_node;
 
 	/*
-	 * The panel is not ready.
+	 * Neither the bridge or the panel is ready.
 	 * Defer the probe.
 	 */
-	if (!sun4i_tcon_find_panel(node))
+	if (!sun4i_tcon_find_panel(node) &&
+	    !sun4i_tcon_find_bridge(node))
 		return -EPROBE_DEFER;
 
 	return component_add(&pdev->dev, &sun4i_tcon_ops);
