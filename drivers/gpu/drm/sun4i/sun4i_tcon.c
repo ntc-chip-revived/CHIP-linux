@@ -404,13 +404,29 @@ static struct device_node *sun4i_tcon_find_panel(struct device_node *node)
 	return NULL;
 }
 
+static struct device_node *sun4i_tcon_find_bridge(struct device_node *node)
+{
+	struct device_node *port, *end_node;
+
+	/* Inputs are listed first, then outputs */
+	port = of_graph_get_port_by_id(node, 1);
+
+	/* Iterate over the endpoints to find a bridge */
+	for_each_child_of_node(port, end_node)
+		/* If the endpoint is not a bridge, go on */
+		if (of_property_read_bool(end_node, "allwinner,bridge"))
+			return of_graph_get_remote_port_parent(end_node);
+
+	return NULL;
+}
+
 static int sun4i_tcon_bind(struct device *dev, struct device *master,
 			   void *data)
 {
 	struct drm_device *drm = data;
 	struct sun4i_drv *drv = drm->dev_private;
 	struct sun4i_tcon *tcon;
-	struct device_node *np;
+	struct device_node *panel, *bridge;
 	int ret;
 
 	tcon = devm_kzalloc(dev, sizeof(*tcon), GFP_KERNEL);
@@ -457,17 +473,29 @@ static int sun4i_tcon_bind(struct device *dev, struct device *master,
 		goto err_free_clocks;
 	}
 
-	np = sun4i_tcon_find_panel(dev->of_node);
-	if (!np) {
-		dev_info(dev, "No panel found... RGB output disabled\n");
+	panel = sun4i_tcon_find_panel(dev->of_node);
+	bridge = sun4i_tcon_find_bridge(dev->of_node);
+	if (!panel && !bridge) {
+		dev_info(dev, "No panel or bridge found... RGB output disabled\n");
 		return 0;
 	}
 
-	tcon->panel = of_drm_find_panel(np);
-	if (!tcon->panel) {
-		dev_err(dev, "Couldn't find our panel\n");
-		ret = -ENODEV;
-		goto err_free_clocks;
+	if (panel) {
+		tcon->panel = of_drm_find_panel(panel);
+		if (!tcon->panel) {
+			dev_err(dev, "Couldn't find our panel\n");
+			ret = -ENODEV;
+			goto err_free_clocks;
+		}
+	}
+
+	if (bridge) {
+		tcon->bridge = of_drm_find_bridge(bridge);
+		if (!tcon->bridge) {
+			dev_err(dev, "Couldn't find our bridge\n");
+			ret = -ENODEV;
+			goto err_free_clocks;
+		}
 	}
 
 	return sun4i_rgb_init(drm);
@@ -495,7 +523,7 @@ static struct component_ops sun4i_tcon_ops = {
 static int sun4i_tcon_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
-	struct device_node *panel_node;
+	struct device_node *panel_node, *bridge_node;
 
 	panel_node = sun4i_tcon_find_panel(node);
 	if (panel_node) {
@@ -504,6 +532,16 @@ static int sun4i_tcon_probe(struct platform_device *pdev)
 		 * before registering into the component framework.
 		 */
 		if (!of_drm_find_panel(panel_node))
+			return -EPROBE_DEFER;
+	}
+
+	bridge_node = sun4i_tcon_find_bridge(node);
+	if (bridge_node) {
+		/*
+		 * If the bridge is not ready yet, defer the probe
+		 * before registering into the component framework.
+		 */
+		if (!of_drm_find_bridge(bridge_node))
 			return -EPROBE_DEFER;
 	}
 

@@ -252,10 +252,11 @@ static int sun4i_drv_add_endpoints(struct device *dev,
 
 	for_each_available_child_of_node(port, ep) {
 		/*
-		 * If the node is a panel, don't register it into the
-		 * component framework
+		 * If the node is a panel or a bridge, don't register
+		 * it into the component framework
 		 */
-		if (of_property_read_bool(ep, "allwinner,panel"))
+		if (of_property_read_bool(ep, "allwinner,panel") ||
+		    of_property_read_bool(ep, "allwinner,bridge"))
 			continue;
 
 		remote = of_graph_get_remote_port_parent(ep);
