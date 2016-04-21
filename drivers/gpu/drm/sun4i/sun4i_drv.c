@@ -223,6 +223,12 @@ static const struct component_master_ops sun4i_drv_master_ops = {
 	.unbind	= sun4i_drv_unbind,
 };
 
+static bool sun4i_drv_node_is_frontend(struct device_node *node)
+{
+	return of_device_is_compatible(node,
+				       "allwinner,sun5i-a13-display-frontend");
+}
+
 static bool sun4i_drv_node_is_tcon(struct device_node *node)
 {
 	return of_device_is_compatible(node, "allwinner,sun5i-a13-tcon");
@@ -244,9 +250,22 @@ static int sun4i_drv_add_endpoints(struct device *dev,
 	struct device_node *port, *ep, *remote;
 	int count = 0;
 
-	/* Add current component */
-	component_match_add(dev, match, compare_of, node);
-	count++;
+	/*
+	 * We don't support the frontend for now, so we will never
+	 * have a device bound. Just skip over it, but we still want
+	 * the rest our pipeline to be added.
+	 */
+	if (!sun4i_drv_node_is_frontend(node) &&
+	    !of_device_is_available(node))
+		return 0;
+
+	if (!sun4i_drv_node_is_frontend(node)) {
+		/* Add current component */
+		DRM_DEBUG_DRIVER("Adding component %s\n",
+				 of_node_full_name(node));
+		component_match_add(dev, match, compare_of, node);
+		count++;
+	}
 
 	/* Inputs are listed first, then outputs */
 	port = of_graph_get_port_by_id(node, 1);
@@ -302,11 +321,6 @@ static int sun4i_drv_probe(struct platform_device *pdev)
 								i);
 		if (!pipeline)
 			break;
-
-		if (!of_device_is_available(pipeline)) {
-			of_node_put(pipeline);
-			continue;
-		}
 
 		count += sun4i_drv_add_endpoints(&pdev->dev, &match,
 						pipeline);
