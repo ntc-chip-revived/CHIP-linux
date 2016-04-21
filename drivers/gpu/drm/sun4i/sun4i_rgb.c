@@ -59,15 +59,31 @@ static int sun4i_rgb_mode_valid(struct drm_connector *connector,
 
 	DRM_DEBUG_DRIVER("Validating modes...\n");
 
-	if ((hsync < 1) || (hsync > 0x3ff) ||
-	    (mode->htotal < 1) || (mode->htotal > 0xfff))
+	if (hsync < 1)
+		return MODE_HSYNC_NARROW;
+
+	if (hsync > 0x3ff)
+		return MODE_HSYNC_WIDE;
+
+	if ((mode->hdisplay < 1) || (mode->htotal < 1))
 		return MODE_H_ILLEGAL;
+
+	if ((mode->hdisplay > 0x7ff) || (mode->htotal > 0xfff))
+		return MODE_BAD_HVALUE;
 
 	DRM_DEBUG_DRIVER("Horizontal parameters OK\n");
 
-	if ((vsync < 1) || (vsync > 0x3ff) ||
-	    (mode->vtotal < 1) || (mode->vtotal > 0xfff))
+	if (vsync < 1)
+		return MODE_VSYNC_NARROW;
+
+	if (vsync > 0x3ff)
+		return MODE_VSYNC_WIDE;
+
+	if ((mode->vdisplay < 1) || (mode->vtotal < 1))
 		return MODE_V_ILLEGAL;
+
+	if ((mode->vdisplay > 0x7ff) || (mode->vtotal > 0xfff))
+		return MODE_BAD_VVALUE;
 
 	DRM_DEBUG_DRIVER("Vertical parameters OK\n");
 
