@@ -216,6 +216,11 @@ static const struct component_master_ops sun4i_drv_master_ops = {
 	.unbind	= sun4i_drv_unbind,
 };
 
+static bool sun4i_drv_node_is_tcon(struct device_node *node)
+{
+	return of_device_is_compatible(node, "allwinner,sun5i-a13-tcon");
+}
+
 static int compare_of(struct device *dev, void *data)
 {
 	DRM_DEBUG_DRIVER("Comparing of node %s with %s\n",
@@ -244,18 +249,30 @@ static int sun4i_drv_add_endpoints(struct device *dev,
 	}
 
 	for_each_available_child_of_node(port, ep) {
-		/*
-		 * If the node is a panel, don't register it into the
-		 * component framework
-		 */
-		if (of_property_read_bool(ep, "allwinner,panel"))
-			continue;
-
 		remote = of_graph_get_remote_port_parent(ep);
 		if (!remote) {
 			DRM_DEBUG_DRIVER("Error retrieving the output node\n");
 			of_node_put(remote);
 			continue;
+		}
+
+		/*
+		 * If the node is our TCON, the first port is used for our
+		 * panel, and will not be part of the
+		 * component framework.
+		 */
+		if (sun4i_drv_node_is_tcon(node)) {
+			struct of_endpoint endpoint;
+
+			if (of_graph_parse_endpoint(ep, &endpoint)) {
+				DRM_DEBUG_DRIVER("Couldn't parse endpoint\n");
+				continue;
+			}
+
+			if (!endpoint.id) {
+				DRM_DEBUG_DRIVER("Endpoint is our panel... skipping\n");
+				continue;
+			}
 		}
 
 		/* Walk down our tree */
