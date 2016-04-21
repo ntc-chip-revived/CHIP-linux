@@ -133,18 +133,28 @@ void sun4i_tcon0_mode_set(struct sun4i_tcon *tcon,
 		     SUN4I_TCON0_BASIC0_X(mode->crtc_hdisplay) |
 		     SUN4I_TCON0_BASIC0_Y(mode->crtc_vdisplay));
 
-	/* Set horizontal display timings */
-	bp = mode->crtc_htotal - mode->crtc_hsync_end;
+	/*
+	 * This is called a backporch in the register documentation,
+	 * but it really is the front porch + hsync
+	 */
+	bp = mode->crtc_htotal - mode->crtc_hsync_start;
 	DRM_DEBUG_DRIVER("Setting horizontal total %d, backporch %d\n",
 			 mode->crtc_htotal, bp);
+
+	/* Set horizontal display timings */
 	regmap_write(tcon->regs, SUN4I_TCON0_BASIC1_REG,
 		     SUN4I_TCON0_BASIC1_H_TOTAL(mode->crtc_htotal) |
 		     SUN4I_TCON0_BASIC1_H_BACKPORCH(bp));
 
-	/* Set vertical display timings */
-	bp = mode->crtc_vtotal - mode->crtc_vsync_end;
+	/*
+	 * This is called a backporch in the register documentation,
+	 * but it really is the front porch + hsync
+	 */
+	bp = mode->crtc_vtotal - mode->crtc_vsync_start;
 	DRM_DEBUG_DRIVER("Setting vertical total %d, backporch %d\n",
 			 mode->crtc_vtotal, bp);
+
+	/* Set vertical display timings */
 	regmap_write(tcon->regs, SUN4I_TCON0_BASIC2_REG,
 		     SUN4I_TCON0_BASIC2_V_TOTAL(mode->crtc_vtotal) |
 		     SUN4I_TCON0_BASIC2_V_BACKPORCH(bp));
