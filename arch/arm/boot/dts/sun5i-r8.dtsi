@@ -112,8 +112,8 @@
 					#size-cells = <0>;
 					reg = <1>;
 
-					tcon0_out_tve0: endpoint@0 {
-						reg = <0>;
+					tcon0_out_tve0: endpoint@1 {
+						reg = <1>;
 						remote-endpoint = <&tve0_in_tcon0>;
 					};
 				};
@@ -135,10 +135,10 @@
 				#address-cells = <1>;
 				#size-cells = <0>;
 
-				fe0_out: port@0 {
+				fe0_out: port@1 {
 					#address-cells = <1>;
 					#size-cells = <0>;
-					reg = <0>;
+					reg = <1>;
 
 					fe0_out_be0: endpoint@0 {
 						reg = <0>;
@@ -192,6 +192,6 @@
 
 	de: display-engine {
 		compatible = "allwinner,sun5i-a13-display-engine";
-		pipelines = <&be0>;
+		pipelines = <&fe0>;
 	};
 };
