@@ -1,0 +1,9 @@
+linux-4.4.11 (4.4.11-ntc-1) jessie; urgency=high
+
+	* Support for HDMI and VGA adapters.
+	* NAND DMA support for sunxi devices
+	* Sun4i-DRM display controller driver
+	* Enable AXP power for OTG
+	* Miscellaneous Wifi fixes
+	
+  -- Ben Young <software@nextthing.co> Fri, 27 May 2016 12:59:00 -0800
