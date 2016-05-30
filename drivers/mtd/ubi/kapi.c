@@ -82,7 +82,7 @@ void ubi_do_get_volume_info(struct ubi_device *ubi, struct ubi_volume *vol,
 {
 	vi->vol_id = vol->vol_id;
 	vi->ubi_num = ubi->ubi_num;
-	vi->size = vol->reserved_pebs;
+	vi->size = vol->reserved_lebs;
 	vi->used_bytes = vol->used_bytes;
 	vi->vol_type = vol->vol_type;
 	vi->corrupted = vol->corrupted;
@@ -532,7 +532,7 @@ int ubi_leb_write(struct ubi_volume_desc *desc, int lnum, const void *buf,
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
 
-	if (lnum < 0 || lnum >= vol->reserved_pebs || offset < 0 || len < 0 ||
+	if (lnum < 0 || lnum >= vol->reserved_lebs || offset < 0 || len < 0 ||
 	    offset + len > vol->usable_leb_size ||
 	    offset & (ubi->min_io_size - 1) || len & (ubi->min_io_size - 1))
 		return -EINVAL;
@@ -577,7 +577,7 @@ int ubi_leb_change(struct ubi_volume_desc *desc, int lnum, const void *buf,
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
 
-	if (lnum < 0 || lnum >= vol->reserved_pebs || len < 0 ||
+	if (lnum < 0 || lnum >= vol->reserved_lebs || len < 0 ||
 	    len > vol->usable_leb_size || len & (ubi->min_io_size - 1))
 		return -EINVAL;
 
@@ -614,7 +614,7 @@ int ubi_leb_erase(struct ubi_volume_desc *desc, int lnum)
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
 
-	if (lnum < 0 || lnum >= vol->reserved_pebs)
+	if (lnum < 0 || lnum >= vol->reserved_lebs)
 		return -EINVAL;
 
 	if (vol->upd_marker)
@@ -674,7 +674,7 @@ int ubi_leb_unmap(struct ubi_volume_desc *desc, int lnum)
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
 
-	if (lnum < 0 || lnum >= vol->reserved_pebs)
+	if (lnum < 0 || lnum >= vol->reserved_lebs)
 		return -EINVAL;
 
 	if (vol->upd_marker)
@@ -710,7 +710,7 @@ int ubi_leb_map(struct ubi_volume_desc *desc, int lnum)
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
 
-	if (lnum < 0 || lnum >= vol->reserved_pebs)
+	if (lnum < 0 || lnum >= vol->reserved_lebs)
 		return -EINVAL;
 
 	if (vol->upd_marker)
@@ -745,7 +745,7 @@ int ubi_is_mapped(struct ubi_volume_desc *desc, int lnum)
 
 	dbg_gen("test LEB %d:%d", vol->vol_id, lnum);
 
-	if (lnum < 0 || lnum >= vol->reserved_pebs)
+	if (lnum < 0 || lnum >= vol->reserved_lebs)
 		return -EINVAL;
 
 	if (vol->upd_marker)
