@@ -34,6 +34,8 @@
 
 /* Basic UBI version 1 support */
 #define UBI_FEAT_BASE  0x1
+/* LEB consolidation support */
+#define UBI_FEAT_CONSO 0x2
 
 /* The highest erase counter value supported by this implementation */
 #define UBI_MAX_ERASECOUNTER 0x7FFFFFFF

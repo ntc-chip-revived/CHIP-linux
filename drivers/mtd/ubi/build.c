@@ -688,7 +688,6 @@ static int io_init(struct ubi_device *ubi, int max_beb_per1024)
 	 */
 
 	ubi->peb_size = ubi->mtd->erasesize;
-	ubi->lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
 	ubi->peb_count  = mtd_div_by_eb(ubi->mtd->size, ubi->mtd);
 	ubi->flash_size = ubi->mtd->size;
 
@@ -700,7 +699,26 @@ static int io_init(struct ubi_device *ubi, int max_beb_per1024)
 	if (ubi->mtd->type == MTD_NORFLASH) {
 		ubi_assert(ubi->mtd->writesize == 1);
 		ubi->nor_flash = 1;
-	}
+	}else if (ubi->mtd->type == MTD_NANDFLASH) {
+		ubi_assert(mtd_pairing_groups_per_eb(ubi->mtd) == 1);
+		ubi->lebs_per_cpeb = 1;
+	} else if (ubi->mtd->type == MTD_MLCNANDFLASH) {
+		ubi->lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
+
+		if (IS_ENABLED(CONFIG_MTD_UBI_CONSOLIDATE) && ubi->lebs_per_cpeb < 2) {
+			ubi_err(ubi, "MLC NAND used but no pairing groups defined");
+			return -EINVAL;
+		}
+
+		if (IS_ENABLED(CONFIG_MTD_UBI_CONSOLIDATE) && ubi->lebs_per_cpeb > 1)
+			ubi->features |= UBI_FEAT_CONSO;
+		else {
+			if (ubi->lebs_per_cpeb < 2)
+				ubi_warn(ubi, "MLC NAND used but no pairing groups defined");
+			else
+				ubi_warn(ubi, "MLC NAND used but CONFIG_MTD_UBI_CONSOLIDATE disabled");
+		}
+        }
 
 	ubi_assert((ubi->features & ubi_builtin_features) == ubi->features);
 

@@ -54,7 +54,15 @@
 /* We support always UBI v1 */
 #define UBI_HAVE_BASE (UBI_FEAT_BASE)
 
+/* LEB consolidation is an optional feature */
+#ifdef CONFIG_MTD_UBI_CONSOLIDATE
+#define UBI_HAVE_CONSO (UBI_FEAT_CONSO)
+#else
+#define UBI_HAVE_CONSO 0
+#endif
+
 #define UBI_FEATURES (\
+	UBI_HAVE_CONSO | \
 	UBI_HAVE_BASE);
 
 struct ubi_device;
