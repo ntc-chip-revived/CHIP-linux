@@ -32,8 +32,8 @@
 
 #include <asm/byteorder.h>
 
-/* The version of UBI images supported by this implementation */
-#define UBI_VERSION 1
+/* Basic UBI version 1 support */
+#define UBI_FEAT_BASE  0x1
 
 /* The highest erase counter value supported by this implementation */
 #define UBI_MAX_ERASECOUNTER 0x7FFFFFFF
@@ -123,8 +123,8 @@ enum {
 /**
  * struct ubi_ec_hdr - UBI erase counter header.
  * @magic: erase counter header magic number (%UBI_EC_HDR_MAGIC)
- * @version: version of UBI implementation which is supposed to accept this
- *           UBI image
+ * @features: set of features this UBI image needs to work (%UBI_FEAT_BASE,
+ *            %UBI_FEAT_CONSO, ...)
  * @padding1: reserved for future, zeroes
  * @ec: the erase counter
  * @vid_hdr_offset: where the VID header starts
@@ -134,12 +134,12 @@ enum {
  * @hdr_crc: erase counter header CRC checksum
  *
  * The erase counter header takes 64 bytes and has a plenty of unused space for
- * future usage. The unused fields are zeroed. The @version field is used to
- * indicate the version of UBI implementation which is supposed to be able to
- * work with this UBI image. If @version is greater than the current UBI
- * version, the image is rejected. This may be useful in future if something
- * is changed radically. This field is duplicated in the volume identifier
- * header.
+ * future usage. The unused fields are zeroed. The @features field is used to
+ * indicate which features the UBI implementation has to offer to be able to
+ * work with this UBI image. If @features is incompatible with the current UBI
+ * implementation, the image is rejected.
+ * %UBI_FEAT_BASE is 0x1 such that existing UBI images will just work and are
+ * accepted as version 1 images.
  *
  * The @vid_hdr_offset and @data_offset fields contain the offset of the the
  * volume identifier header and user data, relative to the beginning of the
@@ -156,7 +156,7 @@ enum {
  */
 struct ubi_ec_hdr {
 	__be32  magic;
-	__u8    version;
+	__u8    features;
 	__u8    padding1[3];
 	__be64  ec; /* Warning: the current limit is 31-bit anyway! */
 	__be32  vid_hdr_offset;
@@ -169,8 +169,7 @@ struct ubi_ec_hdr {
 /**
  * struct ubi_vid_hdr - on-flash UBI volume identifier header.
  * @magic: volume identifier header magic number (%UBI_VID_HDR_MAGIC)
- * @version: UBI implementation version which is supposed to accept this UBI
- *           image (%UBI_VERSION)
+ * @features: see struct ubi_ec_hdr
  * @vol_type: volume type (%UBI_VID_DYNAMIC or %UBI_VID_STATIC)
  * @copy_flag: if this logical eraseblock was copied from another physical
  *             eraseblock (for wear-leveling reasons)
@@ -277,7 +276,7 @@ struct ubi_ec_hdr {
  */
 struct ubi_vid_hdr {
 	__be32  magic;
-	__u8    version;
+	__u8    features;
 	__u8    vol_type;
 	__u8    copy_flag;
 	__u8    compat;

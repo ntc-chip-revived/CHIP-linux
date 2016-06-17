@@ -14,11 +14,17 @@ Contact:	Artem Bityutskiy <dedekind@infradead.org>
 Description:
 		This file contains version of the latest supported UBI on-media
 		format. Currently it is 1, and there is no plan to change this.
-		However, if in the future UBI needs on-flash format changes
-		which cannot be done in a compatible manner, a new format
-		version will be added. So this is a mechanism for possible
-		future backward-compatible (but forward-incompatible)
-		improvements.
+
+What:		/sys/class/ubi/features
+Date:		June 2016
+KernelVersion:	4.7
+Contact:	Richard Weinberger <richard@nod.at>
+Description:
+		This file contains the set of supported features by this UBI
+		implementation (and build configuration).
+		The feature set is compared against the on-media
+		version. Please see ubi-media.h UBI_FEAT_* for all supported
+		features.
 
 What:		/sys/class/ubiX/
 Date:		July 2006
@@ -130,6 +136,13 @@ KernelVersion:	2.6.22
 Contact:	Artem Bityutskiy <dedekind@infradead.org>
 Description:
 		Count of volumes on this UBI device.
+
+What:		/sys/class/ubi/ubiX/features_used
+Date:		June 2016
+KernelVersion:	4.7
+Contact:	Richard Weinberger <richard@nod.at>
+Description:
+		Features used by this UBI device.
 
 What:		/sys/class/ubi/ubiX/ubiX_Y/
 Date:		July 2006

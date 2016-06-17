@@ -64,7 +64,7 @@ void ubi_dump_ec_hdr(const struct ubi_ec_hdr *ec_hdr)
 {
 	pr_err("Erase counter header dump:\n");
 	pr_err("\tmagic          %#08x\n", be32_to_cpu(ec_hdr->magic));
-	pr_err("\tversion        %d\n", (int)ec_hdr->version);
+	pr_err("\tfeatures       %#02x\n", (int)ec_hdr->features);
 	pr_err("\tec             %llu\n", (long long)be64_to_cpu(ec_hdr->ec));
 	pr_err("\tvid_hdr_offset %d\n", be32_to_cpu(ec_hdr->vid_hdr_offset));
 	pr_err("\tdata_offset    %d\n", be32_to_cpu(ec_hdr->data_offset));
@@ -83,7 +83,7 @@ void ubi_dump_vid_hdr(const struct ubi_vid_hdr *vid_hdr)
 {
 	pr_err("Volume identifier header dump:\n");
 	pr_err("\tmagic     %08x\n", be32_to_cpu(vid_hdr->magic));
-	pr_err("\tversion   %d\n",  (int)vid_hdr->version);
+	pr_err("\tfeatures  %#02x\n",  (int)vid_hdr->features);
 	pr_err("\tvol_type  %d\n",  (int)vid_hdr->vol_type);
 	pr_err("\tcopy_flag %d\n",  (int)vid_hdr->copy_flag);
 	pr_err("\tcompat    %d\n",  (int)vid_hdr->compat);

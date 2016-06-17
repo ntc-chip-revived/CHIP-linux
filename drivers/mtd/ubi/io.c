@@ -820,9 +820,10 @@ static int validate_ec_hdr(const struct ubi_device *ubi,
 	vid_hdr_offset = be32_to_cpu(ec_hdr->vid_hdr_offset);
 	leb_start = be32_to_cpu(ec_hdr->data_offset);
 
-	if (ec_hdr->version != UBI_VERSION) {
-		ubi_err(ubi, "node with incompatible UBI version found: this UBI version is %d, image version is %d",
-			UBI_VERSION, (int)ec_hdr->version);
+	if (!ubi_features_compatible(ubi, ec_hdr->features)) {
+		ubi_err(ubi, "node with incompatible UBI features found:"
+			"we support %#x, image wants %#x",
+			ubi->features, (int)ec_hdr->features);
 		goto bad;
 	}
 
@@ -993,7 +994,7 @@ int ubi_io_write_ec_hdr(struct ubi_device *ubi, int pnum,
 	ubi_assert(pnum >= 0 &&  pnum < ubi->peb_count);
 
 	ec_hdr->magic = cpu_to_be32(UBI_EC_HDR_MAGIC);
-	ec_hdr->version = UBI_VERSION;
+	ec_hdr->features = ubi->features;
 	ec_hdr->vid_hdr_offset = cpu_to_be32(ubi->vid_hdr_offset);
 	ec_hdr->data_offset = cpu_to_be32(ubi->leb_start);
 	ec_hdr->image_seq = cpu_to_be32(ubi->image_seq);
@@ -1279,7 +1280,7 @@ int ubi_io_read_vid_hdr(struct ubi_device *ubi, int pnum,
  *
  * This function writes the volume identifier header described by @vid_hdr to
  * physical eraseblock @pnum. This function automatically fills the
- * @vid_hdr->magic and the @vid_hdr->version fields, as well as calculates
+ * @vid_hdr->magic and the @vid_hdr->features fields, as well as calculates
  * header CRC checksum and stores it at vid_hdr->hdr_crc.
  *
  * This function returns zero in case of success and a negative error code in
@@ -1302,7 +1303,7 @@ int ubi_io_write_vid_hdrs(struct ubi_device *ubi, int pnum,
 
 	for (i = 0; i < num; i++) {
 		vid_hdrs[i].magic = cpu_to_be32(UBI_VID_HDR_MAGIC);
-		vid_hdrs[i].version = UBI_VERSION;
+		vid_hdrs[i].features = ubi->features;
 		crc = crc32(UBI_CRC32_INIT, &vid_hdrs[i],
 			    UBI_VID_HDR_SIZE_CRC);
 		vid_hdrs[i].hdr_crc = cpu_to_be32(crc);
@@ -1329,7 +1330,7 @@ int ubi_io_write_vid_hdrs(struct ubi_device *ubi, int pnum,
  *
  * This function writes the volume identifier header described by @vid_hdr to
  * physical eraseblock @pnum. This function automatically fills the
- * @vid_hdr->magic and the @vid_hdr->version fields, as well as calculates
+ * @vid_hdr->magic and the @vid_hdr->features fields, as well as calculates
  * header CRC checksum and stores it at vid_hdr->hdr_crc.
  *
  * This function returns zero in case of success and a negative error code in

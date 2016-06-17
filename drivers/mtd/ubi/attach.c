@@ -895,10 +895,11 @@ static int scan_peb(struct ubi_device *ubi, struct ubi_attach_info *ai,
 	if (!ec_err) {
 		int image_seq;
 
-		/* Make sure UBI version is OK */
-		if (ech->version != UBI_VERSION) {
-			ubi_err(ubi, "this UBI version is %d, image version is %d",
-				UBI_VERSION, (int)ech->version);
+		/* Make sure this UBI version compatible */
+		if (!ubi_features_compatible(ubi, ech->features)) {
+			ubi_err(ubi, "this UBI image requests unsupported features,"
+				"we support %#x, image wants %#x",
+				ubi->features, (int)ech->features);
 			return -EINVAL;
 		}
 

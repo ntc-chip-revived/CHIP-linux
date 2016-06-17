@@ -51,6 +51,12 @@
 /* UBI name used for character devices, sysfs, etc */
 #define UBI_NAME_STR "ubi"
 
+/* We support always UBI v1 */
+#define UBI_HAVE_BASE (UBI_FEAT_BASE)
+
+#define UBI_FEATURES (\
+	UBI_HAVE_BASE);
+
 struct ubi_device;
 
 /* Normal UBI messages */
@@ -461,6 +467,7 @@ struct ubi_debug_info {
  * @cdev: character device object to create character device
  * @ubi_num: UBI device number
  * @ubi_name: UBI device name
+ * @features: set of features used in this instance
  * @vol_count: number of volumes in this UBI device
  * @volumes: volumes of this UBI device
  * @volumes_lock: protects @volumes, @rsvd_pebs, @avail_pebs, beb_rsvd_pebs,
@@ -576,6 +583,7 @@ struct ubi_device {
 	struct device dev;
 	int ubi_num;
 	char ubi_name[sizeof(UBI_NAME_STR)+5];
+	unsigned char features;
 	int vol_count;
 	struct ubi_volume *volumes[UBI_MAX_VOLUMES+UBI_INT_VOL_COUNT];
 	spinlock_t volumes_lock;
@@ -1026,6 +1034,7 @@ int ubi_notify_all(struct ubi_device *ubi, int ntype,
 		   struct notifier_block *nb);
 int ubi_enumerate_volumes(struct notifier_block *nb);
 void ubi_free_internal_volumes(struct ubi_device *ubi);
+bool ubi_features_compatible(const struct ubi_device *ubi, unsigned char req_features);
 
 /* kapi.c */
 void ubi_do_get_device_info(struct ubi_device *ubi, struct ubi_device_info *di);

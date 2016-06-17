@@ -103,16 +103,33 @@ DEFINE_MUTEX(ubi_devices_mutex);
 /* Protects @ubi_devices and @ubi->ref_count */
 static DEFINE_SPINLOCK(ubi_devices_lock);
 
-/* "Show" method for files in '/<sysfs>/class/ubi/' */
+/* Features supported by this UBI implementation */
+static unsigned char ubi_builtin_features = UBI_FEATURES;
+
+/* "Show" method for '/<sysfs>/class/ubi/version' */
 static ssize_t ubi_version_show(struct class *class,
 				struct class_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", UBI_VERSION);
+	/*
+	 * This is cut into stone. Sadly mtd-utils refuse to work
+	 * with anything other than version equal to 1.
+	 * To not break existing UBI tools we keep this 1 forever.
+	 */
+	return sprintf(buf, "1\n");
 }
 
-/* UBI version attribute ('/<sysfs>/class/ubi/version') */
+/* "Show" method for '/<sysfs>/class/ubi/features' */
+static ssize_t ubi_features_show(struct class *class,
+				struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%i\n", ubi_builtin_features);
+}
+
+
+/* UBI attributes ('/<sysfs>/class/ubi/') */
 static struct class_attribute ubi_class_attrs[] = {
 	__ATTR(version, S_IRUGO, ubi_version_show, NULL),
+	__ATTR(features, S_IRUGO, ubi_features_show, NULL),
 	__ATTR_NULL
 };
 
@@ -151,6 +168,21 @@ static struct device_attribute dev_mtd_num =
 	__ATTR(mtd_num, S_IRUGO, dev_attribute_show, NULL);
 static struct device_attribute dev_ro_mode =
 	__ATTR(ro_mode, S_IRUGO, dev_attribute_show, NULL);
+static struct device_attribute dev_features_used =
+	__ATTR(features_used, S_IRUGO, dev_attribute_show, NULL);
+
+/*
+ * ubi_features_compatible - check requested features.
+ *
+ * @req_features: requested features
+ *
+ * Returns %true when we have support for all requested features,
+ * %false othervise.
+ */
+bool ubi_features_compatible(const struct ubi_device *ubi, unsigned char req_features)
+{
+	return (ubi->features & req_features) == req_features;
+}
 
 /**
  * ubi_volume_notify - send a volume change notification.
@@ -391,6 +423,8 @@ static ssize_t dev_attribute_show(struct device *dev,
 		ret = sprintf(buf, "%d\n", ubi->mtd->index);
 	else if (attr == &dev_ro_mode)
 		ret = sprintf(buf, "%d\n", ubi->ro_mode);
+	else if (attr == &dev_features_used)
+		ret = sprintf(buf, "%d\n", ubi->features);
 	else
 		ret = -EINVAL;
 
@@ -411,6 +445,7 @@ static struct attribute *ubi_dev_attrs[] = {
 	&dev_bgt_enabled.attr,
 	&dev_mtd_num.attr,
 	&dev_ro_mode.attr,
+	&dev_features_used.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(ubi_dev);
@@ -666,6 +701,8 @@ static int io_init(struct ubi_device *ubi, int max_beb_per1024)
 		ubi_assert(ubi->mtd->writesize == 1);
 		ubi->nor_flash = 1;
 	}
+
+	ubi_assert((ubi->features & ubi_builtin_features) == ubi->features);
 
 	ubi->min_io_size = ubi->mtd->writesize;
 	ubi->hdrs_min_io_size = ubi->mtd->writesize >> ubi->mtd->subpage_sft;
@@ -923,6 +960,9 @@ int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num,
 	ubi = kzalloc(sizeof(struct ubi_device), GFP_KERNEL);
 	if (!ubi)
 		return -ENOMEM;
+
+	/* We support UBI v1 in any case */
+	ubi->features = UBI_FEAT_BASE;
 
 	ubi->mtd = mtd;
 	ubi->ubi_num = ubi_num;
@@ -1491,7 +1531,6 @@ MODULE_PARM_DESC(fm_autoconvert, "Set this parameter to enable fastmap automatic
 module_param(fm_debug, bool, 0);
 MODULE_PARM_DESC(fm_debug, "Set this parameter to enable fastmap debugging by default. Warning, this will make fastmap slow!");
 #endif
-MODULE_VERSION(__stringify(UBI_VERSION));
 MODULE_DESCRIPTION("UBI - Unsorted Block Images");
 MODULE_AUTHOR("Artem Bityutskiy");
 MODULE_LICENSE("GPL");
