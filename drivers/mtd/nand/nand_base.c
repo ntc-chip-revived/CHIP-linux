@@ -3703,6 +3703,10 @@ static int nand_detect(struct nand_chip *chip, struct nand_flash_dev *type)
 
 	chip->manufacturer.ops = nand_manuf_ids[maf_idx].ops;
 
+	if (!chip->manufacturer.ops)
+		/* assign no operations */
+		chip->manufacturer.ops = nand_manuf_ids[0].ops;
+
 	if (!type)
 		type = nand_flash_ids;
 
