@@ -31,6 +31,9 @@
 
 static int self_check_volumes(struct ubi_device *ubi);
 
+static ssize_t vol_attribute_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count);
 static ssize_t vol_attribute_show(struct device *dev,
 				  struct device_attribute *attr, char *buf);
 
@@ -51,6 +54,20 @@ static struct device_attribute attr_vol_data_bytes =
 	__ATTR(data_bytes, S_IRUGO, vol_attribute_show, NULL);
 static struct device_attribute attr_vol_upd_marker =
 	__ATTR(upd_marker, S_IRUGO, vol_attribute_show, NULL);
+static struct device_attribute attr_vol_eba =
+	__ATTR(eba, (S_IWUSR | S_IRUGO),
+	       vol_attribute_show, vol_attribute_store);
+
+static ssize_t vol_attribute_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct ubi_volume *vol = container_of(dev, struct ubi_volume, dev);
+
+	sscanf(buf, "%d", &vol->tlnum);
+
+	return count;
+}
 
 /*
  * "Show" method for files in '/<sysfs>/class/ubi/ubiX_Y/'.
@@ -107,7 +124,37 @@ static ssize_t vol_attribute_show(struct device *dev,
 		ret = sprintf(buf, "%lld\n", vol->used_bytes);
 	else if (attr == &attr_vol_upd_marker)
 		ret = sprintf(buf, "%d\n", vol->upd_marker);
-	else
+	else if (attr == &attr_vol_eba) {
+		int pnum = -1, pos = -1;
+
+		if (vol->tlnum >= 0) {
+			pnum = vol->eba_tbl[vol->tlnum];
+			if (ubi->consolidated) {
+				struct ubi_leb_desc *clebs = ubi->consolidated[pnum];
+
+				if (clebs) {
+					int i;
+
+					for (i = 0; i < ubi->lebs_per_cpeb; i++) {
+						if (clebs[i].lnum == vol->tlnum &&
+						    clebs[i].vol_id == vol->vol_id) {
+							break;
+						}
+					}
+
+					if (i < ubi->lebs_per_cpeb)
+						pos = i;
+				}
+			}
+		}
+
+		if (pos >= 0)
+			ret = sprintf(buf, "%d:%d\n", pnum, pos);
+		else if (pnum >= 0)
+			ret = sprintf(buf, "%d\n", pnum);
+		else
+			ret = -EINVAL;
+	} else
 		/* This must be a bug */
 		ret = -EINVAL;
 
@@ -129,6 +176,7 @@ static struct attribute *volume_dev_attrs[] = {
 	&attr_vol_usable_eb_size.attr,
 	&attr_vol_data_bytes.attr,
 	&attr_vol_upd_marker.attr,
+	&attr_vol_eba.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(volume_dev);

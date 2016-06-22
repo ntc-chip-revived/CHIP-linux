@@ -731,6 +731,11 @@ struct ubifs_zbranch {
 	int lnum;
 	int offs;
 	int len;
+	struct {
+		int lnum;
+		int offs;
+		int idx;
+	} orig;
 };
 
 /**

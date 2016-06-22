@@ -383,6 +383,7 @@ struct ubi_volume {
 	long long upd_received;
 	void *upd_buf;
 
+	int tlnum;
 	int *eba_tbl;
 	unsigned int checked:1;
 	unsigned int corrupted:1;

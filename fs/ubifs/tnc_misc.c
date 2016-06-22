@@ -309,6 +309,9 @@ static int read_znode(struct ubifs_info *c, int lnum, int offs, int len,
 		zbr->lnum = le32_to_cpu(br->lnum);
 		zbr->offs = le32_to_cpu(br->offs);
 		zbr->len  = le32_to_cpu(br->len);
+		zbr->orig.lnum = lnum;
+		zbr->orig.offs = offs;
+		zbr->orig.idx = i;
 		zbr->znode = NULL;
 
 		/* Validate branch */
@@ -482,8 +485,8 @@ int ubifs_tnc_read_node(struct ubifs_info *c, struct ubifs_zbranch *zbr,
 	/* Make sure the key of the read node is correct */
 	key_read(c, node + UBIFS_KEY_OFFSET, &key1);
 	if (!keys_eq(c, key, &key1)) {
-		ubifs_err(c, "bad key in node at LEB %d:%d",
-			  zbr->lnum, zbr->offs);
+		ubifs_err(c, "bad key in node at LEB %d:%d (%d:%d)",
+			  zbr->lnum, zbr->offs, zbr->orig.lnum, zbr->orig.offs);
 		dbg_tnck(key, "looked for key ");
 		dbg_tnck(&key1, "but found node's key ");
 		ubifs_dump_node(c, node);

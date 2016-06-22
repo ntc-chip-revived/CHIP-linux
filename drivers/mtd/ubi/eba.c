@@ -1077,7 +1077,8 @@ retry:
 	old_pnum = vol->eba_tbl[lnum];
 	vol->eba_tbl[lnum] = pnum;
 	if (old_pnum >= 0)
-		release_peb = ubi_conso_invalidate_leb(ubi, old_pnum, vol_id, lnum);
+		release_peb = ubi_conso_invalidate_leb(ubi, old_pnum, vol_id,
+						       lnum);
 	up_read(&ubi->fm_eba_sem);
 
 	if (full) {
