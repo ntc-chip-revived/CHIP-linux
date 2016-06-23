@@ -544,12 +544,21 @@ static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi,
  * failure.
  */
 static int init_volumes(struct ubi_device *ubi,
-			const struct ubi_attach_info *ai,
+			struct ubi_attach_info *ai,
 			const struct ubi_vtbl_record *vtbl)
 {
 	int i, reserved_lebs = 0;
 	struct ubi_ainf_volume *av;
 	struct ubi_volume *vol;
+	struct rb_node *rb;
+	struct ubi_ainf_leb *aeb;
+	u64 layvol_sqnum = 0;
+
+	av = ubi_find_av(ai, UBI_LAYOUT_VOLUME_ID);
+	ubi_rb_for_each_entry(rb, aeb, &av->root, rb) {
+		if (layvol_sqnum < aeb->sqnum)
+			layvol_sqnum = aeb->sqnum;
+	}
 
 	for (i = 0; i < ubi->vtbl_slots; i++) {
 		cond_resched();
@@ -615,6 +624,26 @@ static int init_volumes(struct ubi_device *ubi,
 			 * empty. FIXME: this should be handled.
 			 */
 			continue;
+		}
+
+		av->highest_lnum = 0;
+		ubi_rb_for_each_entry(rb, aeb, &av->root, rb) {
+			if (aeb->sqnum > layvol_sqnum ||
+			    aeb->desc.lnum < vol->reserved_lebs) {
+				if (av->highest_lnum < aeb->desc.lnum)
+					av->highest_lnum = aeb->desc.lnum;
+
+				continue;
+			}
+
+			/*
+			 * This may happen in case of an unclean reboot
+			 * during re-size.
+			 */
+			if (--aeb->peb->refcount <= 0)
+				list_move_tail(&aeb->peb->list, &ai->erase);
+
+			av->leb_count--;
 		}
 
 		if (av->leb_count != av->used_ebs) {
