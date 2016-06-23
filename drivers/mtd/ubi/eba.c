@@ -276,7 +276,7 @@ int ubi_eba_leb_write_lock_nested(struct ubi_device *ubi, int vol_id, int lnum,
  * success, %1 in case of contention, and and a negative error code in case of
  * failure.
  */
-static int leb_write_trylock(struct ubi_device *ubi, int vol_id, int lnum)
+int leb_write_trylock(struct ubi_device *ubi, int vol_id, int lnum)
 {
 	struct ubi_ltree_entry *le;
 

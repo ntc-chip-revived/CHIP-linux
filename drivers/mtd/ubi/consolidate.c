@@ -15,9 +15,10 @@ static int find_consolidable_lebs(struct ubi_device *ubi,
 				  struct ubi_leb_desc *clebs,
 				  struct ubi_volume **vols)
 {
+	int i, err = 0, attempts = 0, max_attempts = ubi->lebs_per_cpeb * 3;
 	struct ubi_full_leb *fleb;
+	LIST_HEAD(contended);
 	LIST_HEAD(found);
-	int i, err = 0;
 
 	spin_lock(&ubi->full_lock);
 	if (ubi->full_count < ubi->lebs_per_cpeb)
@@ -26,50 +27,70 @@ static int find_consolidable_lebs(struct ubi_device *ubi,
 	if (err)
 		return err;
 
-	for (i = 0; i < ubi->lebs_per_cpeb;) {
+	for (i = 0, attempts = 0;
+	     i < ubi->lebs_per_cpeb && attempts < max_attempts; attempts++) {
 		spin_lock(&ubi->full_lock);
 		fleb = list_first_entry_or_null(&ubi->full,
 						struct ubi_full_leb, node);
+		if (fleb)
+			clebs[i] = fleb->desc;
 		spin_unlock(&ubi->full_lock);
 
-		if (!fleb) {
-			err = -EAGAIN;
+		if (!fleb)
+			break;
+
+		err = leb_write_trylock(ubi, clebs[i].vol_id, clebs[i].lnum);
+		if (err < 0)
 			goto err;
-		} else {
-			list_del_init(&fleb->node);
-			list_add_tail(&fleb->node, &found);
-			ubi->full_count--;
-		}
-
-		clebs[i] = fleb->desc;
-
-		err = ubi_eba_leb_write_lock_nested(ubi, clebs[i].vol_id,
-						    clebs[i].lnum, i);
-		if (err) {
+		else if (err) {
+			/*
+			 * Contention. Let's make sure the LEB is still in
+			 * the full list, and move it at the end of the list.
+			 */
 			spin_lock(&ubi->full_lock);
-			list_del(&fleb->node);
-			list_add_tail(&fleb->node, &ubi->full);
-			ubi->full_count++;
+			fleb = list_first_entry_or_null(&ubi->full,
+							struct ubi_full_leb,
+							node);
+			if (fleb &&
+			    !memcmp(&clebs[i], &fleb->desc, sizeof(*clebs))) {
+				list_del(&fleb->node);
+				list_add_tail(&fleb->node, &found);
+			}
 			spin_unlock(&ubi->full_lock);
-			goto err;
-		}
 
-		spin_lock(&ubi->volumes_lock);
-		vols[i] = ubi->volumes[vol_id2idx(ubi, clebs[i].vol_id)];
-		spin_unlock(&ubi->volumes_lock);
-		/* volume vanished under us */
-		//TODO clarify/document when/why this can happen
-		if (!vols[i]) {
-			ubi_assert(0);
-			ubi_eba_leb_write_unlock(ubi, clebs[i].vol_id, clebs[i].lnum);
-			spin_lock(&ubi->full_lock);
-			list_del_init(&fleb->node);
-			kfree(fleb);
-			spin_unlock(&ubi->full_lock);
 			continue;
 		}
 
-		i++;
+		/*
+		 * Lock acquired, let's make sure the LEB is still in
+		 * the full list. It may have vanished if someone
+		 * unmapped it before our leb_write_trylock() call.
+		 */
+		spin_lock(&ubi->full_lock);
+		fleb = list_first_entry_or_null(&ubi->full,
+						struct ubi_full_leb,
+						node);
+		if (fleb &&
+		    !memcmp(&clebs[i], &fleb->desc, sizeof(*clebs))) {
+			list_del(&fleb->node);
+			ubi->full_count--;
+		} else {
+			fleb = NULL;
+		}
+		spin_unlock(&ubi->full_lock);
+
+		if (fleb) {
+			list_add_tail(&fleb->node, &found);
+			i++;
+		} else {
+			ubi_eba_leb_write_unlock(ubi, clebs[i].vol_id,
+						 clebs[i].lnum);
+		}
+	}
+
+	if (i < ubi->lebs_per_cpeb) {
+		err = -EAGAIN;
+		goto err;
 	}
 
 	while(!list_empty(&found)) {
@@ -78,17 +99,14 @@ static int find_consolidable_lebs(struct ubi_device *ubi,
 		kfree(fleb);
 	}
 
-	if (i < ubi->lebs_per_cpeb - 1) {
-		return -EAGAIN;
-	}
-
 	return 0;
 
 err:
 	while(!list_empty(&found)) {
-		spin_lock(&ubi->full_lock);
 		fleb = list_first_entry(&found, struct ubi_full_leb, node);
 		list_del(&fleb->node);
+
+		spin_lock(&ubi->full_lock);
 		list_add_tail(&fleb->node, &ubi->full);
 		ubi->full_count++;
 		spin_unlock(&ubi->full_lock);

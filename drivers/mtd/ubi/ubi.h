@@ -917,6 +917,7 @@ unsigned long long ubi_next_sqnum(struct ubi_device *ubi);
 int ubi_eba_leb_write_lock_nested(struct ubi_device *ubi, int vol_id, int lnum,
 				  int level);
 void ubi_eba_leb_write_unlock(struct ubi_device *ubi, int vol_id, int lnum);
+int leb_write_trylock(struct ubi_device *ubi, int vol_id, int lnum);
 int self_check_eba(struct ubi_device *ubi, struct ubi_attach_info *ai_fastmap,
 		   struct ubi_attach_info *ai_scan);
 
