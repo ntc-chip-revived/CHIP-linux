@@ -1684,38 +1684,29 @@ int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 			continue;
 
 		ubi_rb_for_each_entry(rb, aeb, &av->root, rb) {
-			if (aeb->desc.lnum >= vol->reserved_lebs) {
-				/*
-				 * This may happen in case of an unclean reboot
-				 * during re-size.
-				 */
-				if (--aeb->peb->refcount <= 0)
-					list_move_tail(&aeb->peb->list, &ai->erase);
-			} else {
-				struct ubi_leb_desc *clebs = NULL;
+			struct ubi_leb_desc *clebs = NULL;
 
-				vol->eba_tbl[aeb->desc.lnum] = aeb->peb->pnum;
+			vol->eba_tbl[aeb->desc.lnum] = aeb->peb->pnum;
 
-				if (ubi->consolidated)
-					clebs = ubi->consolidated[aeb->peb->pnum];
+			if (ubi->consolidated)
+				clebs = ubi->consolidated[aeb->peb->pnum];
 
-				if (clebs) {
-					int i;
+			if (clebs) {
+				int i;
 
-					for (i = 0; i < ubi->lebs_per_cpeb; i++) {
-						if (clebs[i].lnum < 0) {
-							aeb->full = true;
-							break;
-						}
+				for (i = 0; i < ubi->lebs_per_cpeb; i++) {
+					if (clebs[i].lnum < 0) {
+						aeb->full = true;
+						break;
 					}
 				}
-
-				if (aeb->full)
-					ubi_conso_add_full_leb(ubi,
-							       vol->vol_id,
-							       aeb->desc.lnum,
-							       aeb->peb_pos);
 			}
+
+			if (aeb->full)
+				ubi_conso_add_full_leb(ubi,
+						       vol->vol_id,
+						       aeb->desc.lnum,
+						       aeb->peb_pos);
 		}
 	}
 
