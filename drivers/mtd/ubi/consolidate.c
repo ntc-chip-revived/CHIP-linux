@@ -2,23 +2,177 @@
 #include <linux/crc32.h>
 #include "ubi.h"
 
-static void consolidation_unlock(struct ubi_device *ubi,
-				 struct ubi_leb_desc *clebs)
+static void add_full_leb(struct ubi_device *ubi, struct ubi_full_leb *fleb)
 {
-	int i;
+	spin_lock(&ubi->full_lock);
+	list_add_tail(&fleb->node, &ubi->full);
+	ubi->full_count++;
+	spin_unlock(&ubi->full_lock);
+}
 
-	for (i = 0; i < ubi->lebs_per_cpeb; i++)
-		ubi_eba_leb_write_unlock(ubi, clebs[i].vol_id, clebs[i].lnum);
+static struct ubi_full_leb *first_full_leb_locked(struct ubi_device *ubi)
+{
+	return list_first_entry_or_null(&ubi->full,
+					struct ubi_full_leb, node);
+}
+
+static int first_full_leb_desc_locked(struct ubi_device *ubi,
+				      struct ubi_leb_desc *lebd)
+{
+	struct ubi_full_leb *fleb;
+
+	fleb = first_full_leb_locked(ubi);
+	if (!fleb)
+		return -ENOENT;
+
+	*lebd = fleb->desc;
+	return 0;
+}
+
+static int first_full_leb_desc(struct ubi_device *ubi,
+			       struct ubi_leb_desc *lebd)
+{
+	int ret;
+
+	spin_lock(&ubi->full_lock);
+	ret = first_full_leb_desc_locked(ubi, lebd);
+	spin_unlock(&ubi->full_lock);
+
+	return ret;
+}
+
+static int cmp_leb_desc(const struct ubi_leb_desc *a,
+			const struct ubi_leb_desc *b)
+{
+	return memcmp(a, b, sizeof(*a));
+}
+
+static struct ubi_full_leb *
+acquire_full_leb(struct ubi_device *ubi, struct ubi_volume **vol, int *retried,
+		 int max_retry)
+{
+	struct ubi_full_leb *fleb = ERR_PTR(-EAGAIN);
+
+	for (; *retried < max_retry; (*retried)++) {
+		struct ubi_full_leb *first_fleb;
+		struct ubi_leb_desc lebd;
+		int err;
+
+		err = first_full_leb_desc(ubi, &lebd);
+		if (err)
+			break;
+
+		/*
+		 * Volume vanished under us. It can happen when someone is
+		 * removing a volume.
+		 * The volume structure won't be freed before all LEBs have been
+		 * unmapped.
+		 * LEB unmapping acquires the LEB lock and  we're also taking
+		 * this lock when marking LEBs for consolidation, which
+		 * guarantees that *vol is valid until we release all the
+		 * LEB.
+		 *
+		 * FIXME: all this is required because ubi_remove_volume()
+		 * assign the ubi->volumes[X] entry to NULL before actually
+		 * unmapping all the LEBs.
+		 */
+		spin_lock(&ubi->volumes_lock);
+		*vol = ubi->volumes[vol_id2idx(ubi, lebd.vol_id)];
+		spin_unlock(&ubi->volumes_lock);
+
+		if (!*vol)
+			continue;
+
+		err = leb_write_trylock(ubi, lebd.vol_id, lebd.lnum);
+		if (err < 0)
+			return ERR_PTR(err);
+
+		if (!err) {
+			/*
+			 * Lock acquired, let's make sure the LEB is still in
+			 * the full list. It may have vanished if someone
+			 * unmapped it before our leb_write_trylock() call.
+			 */
+			spin_lock(&ubi->full_lock);
+			first_fleb = first_full_leb_locked(ubi);
+			if (first_fleb &&
+			    !cmp_leb_desc(&lebd, &first_fleb->desc)) {
+				list_del(&first_fleb->node);
+				ubi->full_count--;
+				fleb = first_fleb;
+			}
+			spin_unlock(&ubi->full_lock);
+
+			/* We acquired the LEB. */
+			if (fleb != ERR_PTR(-EAGAIN))
+				break;
+
+			/*
+			 * Release the LEB lock if the full LEB entry
+			 * disappeared.
+			 */
+			ubi_eba_leb_write_unlock(ubi, lebd.vol_id, lebd.lnum);
+
+		} else if (err) {
+			/*
+			 * Contention. Let's make sure the LEB is still in
+			 * the full list, and move it at the end of the list.
+			 */
+			spin_lock(&ubi->full_lock);
+			first_fleb = first_full_leb_locked(ubi);
+			if (fleb &&
+			    !cmp_leb_desc(&lebd, &first_fleb->desc)) {
+				list_del(&first_fleb->node);
+				list_add_tail(&first_fleb->node, &ubi->full);
+			}
+			spin_unlock(&ubi->full_lock);
+		}
+
+	}
+
+	return fleb;
+}
+
+static void return_full_leb(struct ubi_device *ubi,
+					  struct ubi_full_leb *fleb)
+{
+	add_full_leb(ubi, fleb);
+	ubi_eba_leb_write_unlock(ubi, fleb->desc.vol_id,
+				 fleb->desc.lnum);
+}
+
+static void return_consolidable_lebs(struct ubi_device *ubi,
+				     struct list_head *flebs)
+{
+	struct ubi_full_leb *fleb;
+
+	while(!list_empty(flebs)) {
+		fleb = list_first_entry(flebs, struct ubi_full_leb, node);
+		list_del(&fleb->node);
+		return_full_leb(ubi, fleb);
+	}
+}
+
+static void release_consolidated_lebs(struct ubi_device *ubi,
+				      struct list_head *flebs)
+{
+	struct ubi_full_leb *fleb;
+
+	while(!list_empty(flebs)) {
+		fleb = list_first_entry(flebs, struct ubi_full_leb, node);
+		list_del(&fleb->node);
+		ubi_eba_leb_write_unlock(ubi, fleb->desc.vol_id,
+					 fleb->desc.lnum);
+		kfree(fleb);
+	}
 }
 
 static int find_consolidable_lebs(struct ubi_device *ubi,
-				  struct ubi_leb_desc *clebs,
+				  struct list_head *flebs,
 				  struct ubi_volume **vols)
 {
-	int i, err = 0, attempts = 0, max_attempts = ubi->lebs_per_cpeb * 3;
+	int i, err = 0, retried = 0, max_retry = ubi->lebs_per_cpeb * 3;
 	struct ubi_full_leb *fleb;
-	LIST_HEAD(contended);
-	LIST_HEAD(found);
 
 	spin_lock(&ubi->full_lock);
 	if (ubi->full_count < ubi->lebs_per_cpeb)
@@ -27,91 +181,20 @@ static int find_consolidable_lebs(struct ubi_device *ubi,
 	if (err)
 		return err;
 
-	for (i = 0, attempts = 0;
-	     i < ubi->lebs_per_cpeb && attempts < max_attempts; attempts++) {
-		spin_lock(&ubi->full_lock);
-		fleb = list_first_entry_or_null(&ubi->full,
-						struct ubi_full_leb, node);
-		if (fleb)
-			clebs[i] = fleb->desc;
-		spin_unlock(&ubi->full_lock);
-
-		if (!fleb)
-			break;
-
-		err = leb_write_trylock(ubi, clebs[i].vol_id, clebs[i].lnum);
-		if (err < 0)
+	for (i = 0; i < ubi->lebs_per_cpeb; i++) {
+		fleb = acquire_full_leb(ubi, &vols[i], &retried, max_retry);
+		if (IS_ERR(fleb)) {
+			err = PTR_ERR(fleb);
 			goto err;
-		else if (err) {
-			/*
-			 * Contention. Let's make sure the LEB is still in
-			 * the full list, and move it at the end of the list.
-			 */
-			spin_lock(&ubi->full_lock);
-			fleb = list_first_entry_or_null(&ubi->full,
-							struct ubi_full_leb,
-							node);
-			if (fleb &&
-			    !memcmp(&clebs[i], &fleb->desc, sizeof(*clebs))) {
-				list_del(&fleb->node);
-				list_add_tail(&fleb->node, &found);
-			}
-			spin_unlock(&ubi->full_lock);
-
-			continue;
 		}
 
-		/*
-		 * Lock acquired, let's make sure the LEB is still in
-		 * the full list. It may have vanished if someone
-		 * unmapped it before our leb_write_trylock() call.
-		 */
-		spin_lock(&ubi->full_lock);
-		fleb = list_first_entry_or_null(&ubi->full,
-						struct ubi_full_leb,
-						node);
-		if (fleb &&
-		    !memcmp(&clebs[i], &fleb->desc, sizeof(*clebs))) {
-			list_del(&fleb->node);
-			ubi->full_count--;
-		} else {
-			fleb = NULL;
-		}
-		spin_unlock(&ubi->full_lock);
-
-		if (fleb) {
-			list_add_tail(&fleb->node, &found);
-			i++;
-		} else {
-			ubi_eba_leb_write_unlock(ubi, clebs[i].vol_id,
-						 clebs[i].lnum);
-		}
-	}
-
-	if (i < ubi->lebs_per_cpeb) {
-		err = -EAGAIN;
-		goto err;
-	}
-
-	while(!list_empty(&found)) {
-		fleb = list_first_entry(&found, struct ubi_full_leb, node);
-		list_del(&fleb->node);
-		kfree(fleb);
+		list_add_tail(&fleb->node, flebs);
 	}
 
 	return 0;
 
 err:
-	while(!list_empty(&found)) {
-		fleb = list_first_entry(&found, struct ubi_full_leb, node);
-		list_del(&fleb->node);
-
-		spin_lock(&ubi->full_lock);
-		list_add_tail(&fleb->node, &ubi->full);
-		ubi->full_count++;
-		spin_unlock(&ubi->full_lock);
-		ubi_eba_leb_write_unlock(ubi, fleb->desc.vol_id, fleb->desc.lnum);
-	}
+	return_consolidable_lebs(ubi, flebs);
 
 	return err;
 }
@@ -120,9 +203,11 @@ static int consolidate_lebs(struct ubi_device *ubi)
 {
 	int i, pnum, offset = ubi->leb_start, err = 0;
 	struct ubi_vid_hdr *vid_hdrs;
-	struct ubi_leb_desc *clebs = NULL, *new_clebs = NULL;
+	struct ubi_leb_desc *clebs;
+	struct ubi_full_leb *fleb;
 	struct ubi_volume **vols = NULL;
 	int *opnums = NULL;
+	LIST_HEAD(flebs);
 
 	if (!ubi_conso_consolidation_needed(ubi))
 		return 0;
@@ -143,24 +228,16 @@ static int consolidate_lebs(struct ubi_device *ubi)
 		goto err_free_mem;
 	}
 
-	new_clebs = kzalloc(sizeof(*clebs) * ubi->lebs_per_cpeb, GFP_KERNEL);
-	if (!new_clebs) {
-		err = -ENOMEM;
-		goto err_free_mem;
-	}
-
-	err = find_consolidable_lebs(ubi, clebs, vols);
+	err = find_consolidable_lebs(ubi, &flebs, vols);
 	if (err)
 		goto err_free_mem;
-
-	memcpy(new_clebs, clebs, sizeof(*clebs) * ubi->lebs_per_cpeb);
 
 	mutex_lock(&ubi->buf_mutex);
 
 	pnum = ubi_wl_get_peb(ubi, true);
 	if (pnum < 0) {
 		err = pnum;
-		//TODO cleanup exit path
+		/* TODO: cleanup exit path */
 		mutex_unlock(&ubi->buf_mutex);
 		up_read(&ubi->fm_eba_sem);
 		goto err_unlock_lebs;
@@ -169,42 +246,34 @@ static int consolidate_lebs(struct ubi_device *ubi)
 	memset(ubi->peb_buf, 0, ubi->peb_size);
 	vid_hdrs = ubi->peb_buf + ubi->vid_hdr_aloffset + ubi->vid_hdr_shift;
 
-	for (i = 0; i < ubi->lebs_per_cpeb; i++) {
-		int vol_id = clebs[i].vol_id, lnum = clebs[i].lnum, lpos = clebs[i].lpos;
+	i = 0;
+	list_for_each_entry(fleb, &flebs, node) {
 		void *buf = ubi->peb_buf + offset;
 		struct ubi_volume *vol = vols[i];
-		int spnum;
-		int data_size;
+		int spnum, data_size, i;
 		u32 crc;
-		bool raw;
 
-		spnum = vol->eba_tbl[lnum];
+		ubi_assert(i < ubi->lebs_per_cpeb);
 
-		/* we raced against leb unmap */
-		if (spnum == UBI_LEB_UNMAPPED) {
-			//TODO: should be fixed now and no longer trigger.
-			ubi_assert(0);
-			err = 0;
-			goto err_unlock_fm_eba;
-		}
+		/* We have a write lock on the LEB, so it should be mapped. */
+		spnum = vol->eba_tbl[fleb->desc.lnum];
+		ubi_assert(spnum != UBI_LEB_UNMAPPED);
 
 		opnums[i] = spnum;
 
-		if (ubi->consolidated[spnum]) {
-			if (!ubi_conso_invalidate_leb(ubi, spnum, vol_id, lnum))
-				opnums[i] = -1;
-			raw = true;
-		} else {
-			ubi_assert(!lpos);
-			raw = false;
-		}
-
 		ubi_assert(offset + ubi->leb_size < ubi->peb_size);
 
-		if (!raw)
-			err = ubi_io_read(ubi, buf, spnum, ubi->leb_start, ubi->leb_size);
-		else
-			err = ubi_io_raw_read(ubi, buf, spnum, ubi->leb_start + (lpos * ubi->leb_size), ubi->leb_size);
+		if (!ubi->consolidated[spnum]) {
+			ubi_assert(!fleb->desc.lpos);
+			err = ubi_io_read(ubi, buf, spnum, ubi->leb_start,
+					  ubi->leb_size);
+		} else {
+			int leb_start = ubi->leb_start +
+					(fleb->desc.lpos * ubi->leb_size);
+
+			err = ubi_io_raw_read(ubi, buf, spnum, leb_start,
+					      ubi->leb_size);
+		}
 
 		if (err && err != UBI_IO_BITFLIPS)
 			goto err_unlock_fm_eba;
@@ -230,23 +299,26 @@ static int consolidate_lebs(struct ubi_device *ubi)
 
 			ubi_free_vid_hdr(ubi, vh);
 
-			data_size = be32_to_cpu(vh[lpos].data_size);
+			data_size = be32_to_cpu(vh[fleb->desc.lpos].data_size);
 			vid_hdrs[i].vol_type = UBI_VID_STATIC;
 			vid_hdrs[i].used_ebs = cpu_to_be32(vol->used_ebs);
 		}
 
 		vid_hdrs[i].data_pad = cpu_to_be32(vol->data_pad);
 		vid_hdrs[i].sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
-		vid_hdrs[i].vol_id = cpu_to_be32(vol_id);
-		vid_hdrs[i].lnum = cpu_to_be32(lnum);
-		vid_hdrs[i].compat = ubi_get_compat(ubi, vol_id);
+		vid_hdrs[i].vol_id = cpu_to_be32(fleb->desc.vol_id);
+		vid_hdrs[i].lnum = cpu_to_be32(fleb->desc.lnum);
+		vid_hdrs[i].compat = ubi_get_compat(ubi, fleb->desc.vol_id);
 		vid_hdrs[i].data_size = cpu_to_be32(data_size);
 		vid_hdrs[i].copy_flag = 1;
 		crc = crc32(UBI_CRC32_INIT, buf, data_size);
 		vid_hdrs[i].data_crc = cpu_to_be32(crc);
 		offset += ubi->leb_size;
 
-		new_clebs[i].lpos = i;
+		clebs[i].lnum = fleb->desc.lnum;
+		clebs[i].vol_id = fleb->desc.vol_id;
+		clebs[i].lpos = i;
+		i++;
 	}
 
 	/*
@@ -272,20 +344,32 @@ static int consolidate_lebs(struct ubi_device *ubi)
 		goto err_unlock_fm_eba;
 	}
 
+	mutex_unlock(&ubi->buf_mutex);
+
 	for (i = 0; i < ubi->lebs_per_cpeb; i++) {
 		struct ubi_volume *vol = vols[i];
+		int vol_id = clebs[i].vol_id;
 		int lnum = clebs[i].lnum;
 
 		vol->eba_tbl[lnum] = pnum;
+
+		/*
+		 * Invalidate the old pnum entry to avoid releasing the
+		 * PEB is some valid LEBs are still stored there.
+		 */
+		if (ubi->consolidated[opnums[i]] &&
+		    !ubi_conso_invalidate_leb(ubi, opnums[i], vol_id, lnum))
+			opnums[i] = -1;
 	}
-	ubi->consolidated[pnum] = new_clebs;
+
+	/* Update the consolidated entry. */
+	ubi->consolidated[pnum] = clebs;
 
 	up_read(&ubi->fm_eba_sem);
-	mutex_unlock(&ubi->buf_mutex);
-	consolidation_unlock(ubi, clebs);
+	release_consolidated_lebs(ubi, &flebs);
 
 	for (i = 0; i < ubi->lebs_per_cpeb; i++) {
-		//TODO set torture if needed
+		/* TODO set torture if needed */
 		if (opnums[i] >= 0)
 			ubi_wl_put_peb(ubi, opnums[i], 0);
 	}
@@ -300,15 +384,10 @@ err_unlock_fm_eba:
 	mutex_unlock(&ubi->buf_mutex);
 	up_read(&ubi->fm_eba_sem);
 
-	for (i = 0; i < ubi->lebs_per_cpeb; i++)
-		ubi_conso_add_full_leb(ubi, clebs[i].vol_id, clebs[i].lnum,
-				       clebs[i].lpos);
-
 	ubi_wl_put_peb(ubi, pnum, 0);
 err_unlock_lebs:
-	consolidation_unlock(ubi, clebs);
+	return_consolidable_lebs(ubi, &flebs);
 err_free_mem:
-	kfree(new_clebs);
 	kfree(clebs);
 	kfree(opnums);
 	kfree(vols);
@@ -453,8 +532,8 @@ int ubi_conso_add_full_leb(struct ubi_device *ubi, int vol_id, int lnum, int lpo
 	return 0;
 }
 
-bool ubi_conso_invalidate_leb(struct ubi_device *ubi, int pnum,
-				   int vol_id, int lnum)
+bool ubi_conso_invalidate_leb(struct ubi_device *ubi, int pnum, int vol_id,
+			      int lnum)
 {
 	struct ubi_leb_desc *clebs = NULL;
 	int i, pos = -1, remaining = 0;
