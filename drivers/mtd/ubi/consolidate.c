@@ -228,6 +228,7 @@ static int consolidate_lebs(struct ubi_device *ubi)
 		goto err_free_mem;
 	}
 
+	pr_info("%s:%i\n", __func__, __LINE__);
 	err = find_consolidable_lebs(ubi, &flebs, vols);
 	if (err)
 		goto err_free_mem;
@@ -243,9 +244,18 @@ static int consolidate_lebs(struct ubi_device *ubi)
 		goto err_unlock_lebs;
 	}
 
+	pr_info("%s:%i\n", __func__, __LINE__);
 	memset(ubi->peb_buf, 0, ubi->peb_size);
 	vid_hdrs = ubi->peb_buf + ubi->vid_hdr_aloffset + ubi->vid_hdr_shift;
+	vid_hdrs->flags = cpu_to_be32(VIDH_FLAG_CONSOLIDATED);
+	err = ubi_io_write_vid_hdrs(ubi, pnum, vid_hdrs, 1);
+	if (err) {
+		ubi_warn(ubi, "failed to write VID headers to PEB %d",
+			 pnum);
+		goto err_unlock_lebs;
+	}
 
+	vid_hdrs = ubi->peb_buf + ubi->peb_size - ubi->vid_hdr_alsize;
 	i = 0;
 	list_for_each_entry(fleb, &flebs, node) {
 		void *buf = ubi->peb_buf + offset;
@@ -254,13 +264,16 @@ static int consolidate_lebs(struct ubi_device *ubi)
 		u32 crc;
 
 		ubi_assert(i < ubi->lebs_per_cpeb);
+		pr_info("%s:%i\n", __func__, __LINE__);
 
 		/* We have a write lock on the LEB, so it should be mapped. */
 		spnum = vol->eba_tbl[fleb->desc.lnum];
 		ubi_assert(spnum != UBI_LEB_UNMAPPED);
+		pr_info("%s:%i\n", __func__, __LINE__);
 
 		opnums[i] = spnum;
 
+		pr_info("%s:%i\n", __func__, __LINE__);
 		ubi_assert(offset + ubi->leb_size < ubi->peb_size);
 
 		if (!ubi->consolidated[spnum]) {
@@ -275,6 +288,7 @@ static int consolidate_lebs(struct ubi_device *ubi)
 					      ubi->leb_size);
 		}
 
+		pr_info("%s:%i\n", __func__, __LINE__);
 		if (err && err != UBI_IO_BITFLIPS)
 			goto err_unlock_fm_eba;
 
@@ -302,39 +316,39 @@ static int consolidate_lebs(struct ubi_device *ubi)
 			data_size = be32_to_cpu(vh[fleb->desc.lpos].data_size);
 			vid_hdrs[i].vol_type = UBI_VID_STATIC;
 			vid_hdrs[i].used_ebs = cpu_to_be32(vol->used_ebs);
+			vid_hdrs[i].data_crc = vh[fleb->desc.lpos].data_crc;
+			vid_hdrs[i].data_size = vh[fleb->desc.lpos].data_size;
 		}
 
+		vid_hdrs[i].magic = cpu_to_be32(UBI_VID_HDR_MAGIC);
 		vid_hdrs[i].data_pad = cpu_to_be32(vol->data_pad);
 		vid_hdrs[i].sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 		vid_hdrs[i].vol_id = cpu_to_be32(fleb->desc.vol_id);
 		vid_hdrs[i].lnum = cpu_to_be32(fleb->desc.lnum);
 		vid_hdrs[i].compat = ubi_get_compat(ubi, fleb->desc.vol_id);
+		/*
 		vid_hdrs[i].data_size = cpu_to_be32(data_size);
 		vid_hdrs[i].copy_flag = 1;
 		crc = crc32(UBI_CRC32_INIT, buf, data_size);
 		vid_hdrs[i].data_crc = cpu_to_be32(crc);
+		*/
 		offset += ubi->leb_size;
+		vid_hdrs[i].magic = cpu_to_be32(UBI_VID_HDR_MAGIC);
+		vid_hdrs[i].version = UBI_VERSION;
+		crc = crc32(UBI_CRC32_INIT, &vid_hdrs[i],
+			    UBI_VID_HDR_SIZE_CRC);
+		vid_hdrs[i].hdr_crc = cpu_to_be32(crc);
+
+		pr_info("%s:%i\n", __func__, __LINE__);
 
 		clebs[i].lnum = fleb->desc.lnum;
 		clebs[i].vol_id = fleb->desc.vol_id;
 		clebs[i].lpos = i;
 		i++;
+		pr_info("%s:%i\n", __func__, __LINE__);
 	}
 
-	/*
-	 * Pad remaining pages with zeros to prevent problem on some MLC chip
-	 * that expect the whole block to be programmed in order to work
-	 * reliably (some Hynix chips are impacted).
-	 */
-	memset(ubi->peb_buf + offset, 0, ubi->peb_size - offset);
-
-	err = ubi_io_write_vid_hdrs(ubi, pnum, vid_hdrs, ubi->lebs_per_cpeb);
-	if (err) {
-		ubi_warn(ubi, "failed to write VID headers to PEB %d",
-			 pnum);
-		goto err_unlock_lebs;
-	}
-
+	pr_info("%s:%i\n", __func__, __LINE__);
 	err = ubi_io_raw_write(ubi, ubi->peb_buf + ubi->leb_start,
 			       pnum, ubi->leb_start,
 			       ubi->peb_size - ubi->leb_start);
@@ -344,6 +358,7 @@ static int consolidate_lebs(struct ubi_device *ubi)
 		goto err_unlock_fm_eba;
 	}
 
+	pr_info("%s:%i\n", __func__, __LINE__);
 	mutex_unlock(&ubi->buf_mutex);
 
 	for (i = 0; i < ubi->lebs_per_cpeb; i++) {
@@ -365,6 +380,7 @@ static int consolidate_lebs(struct ubi_device *ubi)
 	/* Update the consolidated entry. */
 	ubi->consolidated[pnum] = clebs;
 
+	pr_info("%s:%i\n", __func__, __LINE__);
 	up_read(&ubi->fm_eba_sem);
 	release_consolidated_lebs(ubi, &flebs);
 
@@ -374,6 +390,7 @@ static int consolidate_lebs(struct ubi_device *ubi)
 			ubi_wl_put_peb(ubi, opnums[i], 0);
 	}
 
+	pr_info("%s:%i\n", __func__, __LINE__);
 	kfree(clebs);
 	kfree(opnums);
 	kfree(vols);

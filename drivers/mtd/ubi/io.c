@@ -1038,6 +1038,15 @@ static int validate_vid_hdr(const struct ubi_device *ubi,
 	int data_pad = be32_to_cpu(vid_hdr->data_pad);
 	int data_crc = be32_to_cpu(vid_hdr->data_crc);
 	int usable_leb_size = ubi->leb_size - data_pad;
+	u32 flags = be32_to_cpu(vid_hdr->flags);
+
+	/*
+	 * Information in the first VID header are irrelevant, we'll check
+	 * consistency of the second VID header (at the end of the PEB).
+	 */
+	flags = be32_to_cpu(vid_hdr->flags);
+	if ((flags & VIDH_FLAG_CONSOLIDATED))
+		return 0;
 
 	if (copy_flag != 0 && copy_flag != 1) {
 		ubi_err(ubi, "bad copy_flag");
@@ -1142,6 +1151,69 @@ bad:
 	return 1;
 }
 
+static int ubi_io_check_vid_hdr(struct ubi_device *ubi, int pnum,
+				struct ubi_vid_hdr *vid_hdr, int read_err,
+				int verbose, bool last_vidh)
+{
+	u32 magic, crc, hdr_crc;
+	int err;
+
+	magic = be32_to_cpu(vid_hdr->magic);
+	if (magic != UBI_VID_HDR_MAGIC) {
+		if (mtd_is_eccerr(read_err))
+			return UBI_IO_BAD_HDR_EBADMSG;
+
+		if (ubi_check_pattern(vid_hdr, 0xFF, UBI_VID_HDR_SIZE)) {
+			if (verbose)
+				ubi_warn(ubi, "no VID header found at PEB %d, only 0xFF bytes",
+					 pnum);
+
+			dbg_bld("no VID header found at PEB %d, only 0xFF bytes",
+				pnum);
+
+			if (!read_err)
+				return UBI_IO_FF;
+			else
+				return UBI_IO_FF_BITFLIPS;
+		}
+
+		if (verbose) {
+			ubi_warn(ubi, "bad magic number at PEB %d: %08x instead of %08x",
+				 pnum, magic, UBI_VID_HDR_MAGIC);
+			ubi_dump_vid_hdr(vid_hdr);
+		}
+
+		dbg_bld("bad magic number at PEB %d: %08x instead of %08x",
+			pnum, magic, UBI_VID_HDR_MAGIC);
+
+		return UBI_IO_BAD_HDR;
+	}
+
+	crc = crc32(UBI_CRC32_INIT, vid_hdr, UBI_VID_HDR_SIZE_CRC);
+	hdr_crc = be32_to_cpu(vid_hdr->hdr_crc);
+	if (hdr_crc != crc) {
+		if (verbose) {
+			ubi_warn(ubi, "bad CRC at PEB %d, calculated %#08x, read %#08x",
+				 pnum, crc, hdr_crc);
+			ubi_dump_vid_hdr(vid_hdr);
+		}
+		dbg_bld("bad CRC at PEB %d, calculated %#08x, read %#08x",
+			pnum, crc, hdr_crc);
+		if (!read_err)
+			return UBI_IO_BAD_HDR;
+		else
+			return UBI_IO_BAD_HDR_EBADMSG;
+	}
+
+	err = validate_vid_hdr(ubi, vid_hdr);
+	if (err) {
+		ubi_err(ubi, "validation failed for PEB %d", pnum);
+		return -EINVAL;
+	}
+
+	return read_err ? UBI_IO_BITFLIPS : 0;
+}
+
 /**
  * ubi_io_read_vid_hdrs - read and check a volume identifier header.
  * @ubi: UBI device description object
@@ -1163,94 +1235,64 @@ int ubi_io_read_vid_hdrs(struct ubi_device *ubi, int pnum,
 			 struct ubi_vid_hdr *vid_hdrs, int *num,
 			 int verbose)
 {
-	int err = 0, ret, read_err, i, max = *num;
-	uint32_t crc, magic, hdr_crc;
+	struct ubi_vid_hdr *vid_hdr = vid_hdrs;
+	int err = 0, read_err, i;
+	bool bitflips;
+	u32 flags;
 	void *p;
 
 	dbg_io("read VID headers from PEB %d", pnum);
 	ubi_assert(pnum >= 0 &&  pnum < ubi->peb_count);
 
+	*num = 1;
 	p = (char *)vid_hdrs - ubi->vid_hdr_shift;
 	read_err = ubi_io_read(ubi, p, pnum, ubi->vid_hdr_aloffset,
-			  ubi->vid_hdr_alsize);
+			       ubi->vid_hdr_alsize);
 	if (read_err && read_err != UBI_IO_BITFLIPS &&
 	    !mtd_is_eccerr(read_err))
 		return read_err;
 
-	for (i = 0; i < max; i++) {
+	err = ubi_io_check_vid_hdr(ubi, pnum, vid_hdr, read_err, verbose,
+				   ubi->lebs_per_cpeb > 1);
+	if (err && err != UBI_IO_BITFLIPS)
+		return err;
+
+	/* Return here if it's a normal (not consolidated) LEB. */
+	flags = be32_to_cpu(vid_hdr->flags);
+	if (!(flags & VIDH_FLAG_CONSOLIDATED))
+		return err;
+
+	if (err == UBI_IO_BITFLIPS)
+		bitflips = true;
+
+	/* Read the second VID header at the end of the PEB. */
+	read_err = ubi_io_raw_read(ubi, p, pnum,
+				   ubi->peb_size - ubi->min_io_size,
+				   ubi->vid_hdr_alsize);
+	if (read_err && read_err != UBI_IO_BITFLIPS &&
+	    !mtd_is_eccerr(read_err))
+		return read_err;
+
+	for (i = 0; i < ubi->lebs_per_cpeb; i++) {
 		struct ubi_vid_hdr *vid_hdr = vid_hdrs + i;
 
-		magic = be32_to_cpu(vid_hdr->magic);
-		if (magic != UBI_VID_HDR_MAGIC) {
-			/*
-			 * The I/O unit containing the VID header is padded
-			 * with zeros: do not complain if we managed to read
-			 * at least one valid header.
+		err = ubi_io_check_vid_hdr(ubi, pnum, vid_hdr, read_err,
+					   verbose, true);
+		if (err == UBI_IO_BITFLIPS) {
+			bitflips = true;
+		} else if (err) {
+			/* 
+			 * UBI_IO_FF and UBI_IO_FF_BITFLIPS should be
+			 * considered as UBI_IO_BAD_HDR here, because
+			 * we want to re-erase the whole LEB.
 			 */
-			if (i && !magic)
-				break;
-
-			if (mtd_is_eccerr(read_err)) {
-				err = UBI_IO_BAD_HDR_EBADMSG;
-				break;
-			}
-
-			if (ubi_check_pattern(vid_hdr, 0xFF, UBI_VID_HDR_SIZE)) {
-				if (verbose && !i)
-					ubi_warn(ubi, "no VID header found at PEB %d, only 0xFF bytes",
-						 pnum);
-				dbg_bld("no VID header found at PEB %d, only 0xFF bytes",
-					pnum);
-				if (!read_err)
-					err = UBI_IO_FF;
-				else
-					err = UBI_IO_FF_BITFLIPS;
-				break;
-			}
-
-			if (verbose && !i) {
-				ubi_warn(ubi, "bad magic number at PEB %d: %08x instead of %08x",
-						pnum, magic, UBI_VID_HDR_MAGIC);
-				ubi_dump_vid_hdr(vid_hdr);
-			}
-			dbg_bld("bad magic number at PEB %d: %08x instead of %08x",
-					pnum, magic, UBI_VID_HDR_MAGIC);
-			err = UBI_IO_BAD_HDR;
-			break;
+			return UBI_IO_BAD_HDR;
 		}
-
-		crc = crc32(UBI_CRC32_INIT, vid_hdr, UBI_VID_HDR_SIZE_CRC);
-		hdr_crc = be32_to_cpu(vid_hdr->hdr_crc);
-
-		if (hdr_crc != crc) {
-			if (verbose && !i) {
-				ubi_warn(ubi, "bad CRC at PEB %d, calculated %#08x, read %#08x",
-						pnum, crc, hdr_crc);
-				ubi_dump_vid_hdr(vid_hdr);
-			}
-			dbg_bld("bad CRC at PEB %d, calculated %#08x, read %#08x",
-					pnum, crc, hdr_crc);
-			if (!read_err)
-				err = UBI_IO_BAD_HDR;
-			else
-				err = UBI_IO_BAD_HDR_EBADMSG;
-			break;
-		}
-
-		ret = validate_vid_hdr(ubi, vid_hdr);
-		if (ret && !i) {
-			ubi_err(ubi, "validation failed for PEB %d", pnum);
-			err = -EINVAL;
-			break;
-		}
-
-		if (read_err)
-			err |= UBI_IO_BITFLIPS;
 	}
 
-	*num = i;
+	*num = ubi->lebs_per_cpeb;
 
-	return err;
+	return bitflips ? UBI_IO_BITFLIPS : 0;
 }
 
 /**

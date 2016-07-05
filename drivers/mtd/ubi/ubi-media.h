@@ -166,6 +166,8 @@ struct ubi_ec_hdr {
 	__be32  hdr_crc;
 } __packed;
 
+#define VIDH_FLAG_CONSOLIDATED		BIT(0)
+
 /**
  * struct ubi_vid_hdr - on-flash UBI volume identifier header.
  * @magic: volume identifier header magic number (%UBI_VID_HDR_MAGIC)
@@ -283,7 +285,7 @@ struct ubi_vid_hdr {
 	__u8    compat;
 	__be32  vol_id;
 	__be32  lnum;
-	__u8    padding1[4];
+	__be32	flags;
 	__be32  data_size;
 	__be32  used_ebs;
 	__be32  data_pad;

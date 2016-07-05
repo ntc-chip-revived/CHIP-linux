@@ -421,13 +421,13 @@ int ubi_compare_lebs(struct ubi_device *ubi, const struct ubi_ainf_leb *aeb,
 	data_crc = be32_to_cpu(vid_hdr->data_crc);
 	crc = crc32(UBI_CRC32_INIT, ubi->peb_buf, len);
 	if (crc != data_crc) {
-		dbg_bld("PEB %d CRC error: calculated %#08x, must be %#08x",
+		pr_info("PEB %d CRC error: calculated %#08x, must be %#08x\n",
 			pnum, crc, data_crc);
 		corrupted = 1;
 		bitflips = 0;
 		second_is_newer = !second_is_newer;
 	} else {
-		dbg_bld("PEB %d CRC is OK", pnum);
+		pr_info("PEB %d CRC is OK\n", pnum);
 		bitflips |= !!err;
 	}
 	mutex_unlock(&ubi->buf_mutex);

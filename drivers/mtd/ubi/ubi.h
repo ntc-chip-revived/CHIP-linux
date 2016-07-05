@@ -713,6 +713,7 @@ struct ubi_ainf_leb {
 	struct ubi_leb_desc desc;
 	unsigned long long sqnum;
 	unsigned int copy_flag:1;
+	unsigned int consolidated:1;
 	unsigned int full:1;
 	int peb_pos;
 	struct ubi_ainf_peb *peb;
