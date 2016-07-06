@@ -1237,7 +1237,7 @@ int ubi_io_read_vid_hdrs(struct ubi_device *ubi, int pnum,
 {
 	struct ubi_vid_hdr *vid_hdr = vid_hdrs;
 	int err = 0, read_err, i;
-	bool bitflips;
+	bool bitflips = false;
 	u32 flags;
 	void *p;
 
