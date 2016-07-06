@@ -1342,10 +1342,10 @@ out_unlock_leb:
 int ubi_eba_copy_lebs(struct ubi_device *ubi, int from, int to,
 		     struct ubi_vid_hdr *vid_hdr, int nvidh)
 {
-	int err, i;
+	int err, i, nlebs = nvidh;
 	int *vol_id = NULL, *lnum = NULL;
 	struct ubi_volume **vol = NULL;
-	uint32_t crc;
+	struct ubi_vid_hdr *new_vid_hdrs;
 
 	vol_id = kmalloc(nvidh * sizeof(*vol_id), GFP_NOFS);
 	lnum = kmalloc(nvidh * sizeof(*lnum), GFP_NOFS);
@@ -1417,6 +1417,7 @@ int ubi_eba_copy_lebs(struct ubi_device *ubi, int from, int to,
 			return MOVE_RETRY;
 		}
 	}
+
 	for (i = 0; i < nvidh; i++) {
 		/*
 		 * The LEB might have been put meanwhile, and the task which put it is
@@ -1424,11 +1425,16 @@ int ubi_eba_copy_lebs(struct ubi_device *ubi, int from, int to,
 		 * cancel it.
 		 */
 		if (vol[i]->eba_tbl[lnum[i]] != from) {
-			ubi_msg(ubi, "LEB %d:%d is no longer mapped to PEB %d, mapped to PEB %d, cancel",
-			       vol_id[i], lnum[i], from, vol[i]->eba_tbl[lnum[i]]);
-			err = MOVE_CANCEL_RACE;
-			goto out_unlock_leb;
+			lnum[i] = -1;
+			vol_id[i] = -1;
+			nlebs--;
 		}
+	}
+
+	if (!nlebs) {
+		ubi_msg(ubi, "no more LEBs mapped to PEB %d, cancel", from);
+		err = MOVE_CANCEL_RACE;
+		goto out_unlock_leb;
 	}
 
 	/*
@@ -1438,8 +1444,11 @@ int ubi_eba_copy_lebs(struct ubi_device *ubi, int from, int to,
 	 * @ubi->buf_mutex.
 	 */
 	mutex_lock(&ubi->buf_mutex);
+	memset(ubi->peb_buf + ubi->vid_hdr_aloffset, 0, ubi->vid_hdr_alsize);
+
 	dbg_wl("read %d bytes of data", ubi->peb_size - ubi->leb_start);
-	err = ubi_io_raw_read(ubi, ubi->peb_buf, from, ubi->leb_start, ubi->peb_size - ubi->leb_start);
+	err = ubi_io_raw_read(ubi, ubi->peb_buf + ubi->leb_start, from, ubi->leb_start,
+			      ubi->peb_size - ubi->leb_start);
 	if (err && err != UBI_IO_BITFLIPS) {
 		ubi_warn(ubi, "error %d while reading data from PEB %d",
 			 err, from);
@@ -1447,19 +1456,26 @@ int ubi_eba_copy_lebs(struct ubi_device *ubi, int from, int to,
 		goto out_unlock_buf;
 	}
 
+	/* Now update the real VID headers */
+	new_vid_hdrs = ubi->peb_buf + ubi->peb_size - ubi->vid_hdr_alsize;
+
 	cond_resched();
 	for (i = 0; i < nvidh; i++) {
-		//TODO: we could skip crc calucation as consolidated LEB _always_ hav copy_flag=1 and hence also a valid crc...
-		crc = crc32(UBI_CRC32_INIT, ubi->peb_buf + ubi->leb_start + (i * ubi->leb_size), be32_to_cpu(vid_hdr[i].data_size));
-		vid_hdr[i].copy_flag = 1;
-		vid_hdr[i].data_crc = cpu_to_be32(crc);
-		vid_hdr[i].sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
+		ubi_assert(new_vid_hdrs[i].data_size);
+		ubi_assert(new_vid_hdrs[i].copy_flag);
 
-		cond_resched();
+		/* Do not update the sqnum if the LEB has been unmapped. */
+		if (lnum[i] < 0)
+			continue;
+
+		new_vid_hdrs[i].sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 	}
 
+	/* Prepare the dummy VID header */
+	new_vid_hdrs = ubi->peb_buf + ubi->vid_hdr_aloffset + ubi->vid_hdr_shift;
+	new_vid_hdrs->flags = cpu_to_be32(VIDH_FLAG_CONSOLIDATED);
 
-	err = ubi_io_write_vid_hdrs(ubi, to, vid_hdr, nvidh);
+	err = ubi_io_write_vid_hdrs(ubi, to, new_vid_hdrs, 1);
 	if (err) {
 		if (err == -EIO)
 			err = MOVE_TARGET_WR_ERR;
@@ -1468,7 +1484,8 @@ int ubi_eba_copy_lebs(struct ubi_device *ubi, int from, int to,
 
 	cond_resched();
 
-	err = ubi_io_raw_write(ubi, ubi->peb_buf, to, ubi->leb_start, ubi->peb_size - ubi->leb_start);
+	err = ubi_io_raw_write(ubi, ubi->peb_buf + ubi->leb_start, to,
+			       ubi->leb_start, ubi->peb_size - ubi->leb_start);
 	if (err) {
 		if (err == -EIO)
 			err = MOVE_TARGET_WR_ERR;
