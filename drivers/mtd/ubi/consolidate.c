@@ -391,7 +391,6 @@ static int consolidate_lebs(struct ubi_device *ubi)
 	}
 
 	pr_info("%s:%i\n", __func__, __LINE__);
-	kfree(clebs);
 	kfree(opnums);
 	kfree(vols);
 
