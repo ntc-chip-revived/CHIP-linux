@@ -1461,14 +1461,16 @@ int ubi_eba_copy_lebs(struct ubi_device *ubi, int from, int to,
 
 	cond_resched();
 	for (i = 0; i < nvidh; i++) {
-		ubi_assert(new_vid_hdrs[i].data_size);
-		ubi_assert(new_vid_hdrs[i].copy_flag);
+		u32 crc;
 
 		/* Do not update the sqnum if the LEB has been unmapped. */
 		if (lnum[i] < 0)
 			continue;
 
 		new_vid_hdrs[i].sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
+		crc = crc32(UBI_CRC32_INIT, &new_vid_hdrs[i],
+			    UBI_VID_HDR_SIZE_CRC);
+		new_vid_hdrs[i].hdr_crc = cpu_to_be32(crc);
 	}
 
 	/* Prepare the dummy VID header */
