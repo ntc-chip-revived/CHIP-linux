@@ -239,6 +239,14 @@ bool ubi_work_join_one(struct ubi_device *ubi)
 	return success;
 }
 
+void ubi_work_join(struct ubi_device *ubi, struct ubi_work *wrk)
+{
+	wait_for_completion(&wrk->comp);
+	spin_lock(&ubi->wl_lock);
+	kref_put(&wrk->ref, destroy_work);
+	spin_unlock(&ubi->wl_lock);
+}
+
 /**
  * ubi_work_flush - flush all pending works.
  * @ubi: UBI device description object
