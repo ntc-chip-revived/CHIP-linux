@@ -314,6 +314,7 @@ static int consolidate_lebs(struct ubi_device *ubi)
 			opnums[i] = -1;
 	}
 	ubi->consolidated[pnum] = new_clebs;
+	atomic_inc(&ubi->consolidated_count);
 
 	up_read(&ubi->fm_eba_sem);
 	mutex_unlock(&ubi->buf_mutex);
@@ -380,6 +381,14 @@ static bool consolidation_possible(struct ubi_device *ubi)
 		return false;
 
 	if (ubi->full_count < ubi->lebs_per_cpeb)
+		return false;
+
+	/*
+	 * Never consolidate more than ubi->rsvd_pebs - ubi->beb_rsvd_pebs,
+	 * such that we always have enough free PEBs for bad block handling,
+	 * atomic LEB change, wearleveling, ...*/
+	//TODO add a new variable which represents the reserved PEBs for, ALC, WL, ...
+	if (atomic_read(&ubi->consolidated_count) >= ubi->rsvd_pebs - ubi->beb_rsvd_pebs - 3)
 		return false;
 
 	return true;
@@ -533,6 +542,7 @@ bool ubi_conso_invalidate_leb(struct ubi_device *ubi, int pnum, int vol_id,
 
 		if (!remaining) {
 			ubi->consolidated[pnum] = NULL;
+			atomic_dec(&ubi->consolidated_count);
 			kfree(clebs);
 		}
 	}

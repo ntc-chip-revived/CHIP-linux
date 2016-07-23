@@ -1673,6 +1673,7 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 				clebs[i].vol_id = -1;
 			}
 
+			atomic_inc(&ubi->consolidated_count);
 			ubi->consolidated[peb->pnum] = clebs;
 		}
 

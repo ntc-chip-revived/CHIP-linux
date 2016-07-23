@@ -41,6 +41,7 @@
 #include <linux/notifier.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/ubi.h>
+#include <linux/atomic.h>
 #include <asm/pgtable.h>
 
 #include "ubi-media.h"
@@ -630,6 +631,7 @@ struct ubi_device {
 	struct rb_root erroneous;
 	struct rb_root free;
 	int free_count;
+	atomic_t consolidated_count;
 	struct rb_root scrub;
 	struct list_head pq[UBI_PROT_QUEUE_LEN];
 	int pq_head;
