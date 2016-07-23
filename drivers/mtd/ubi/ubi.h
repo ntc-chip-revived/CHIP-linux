@@ -638,6 +638,7 @@ struct ubi_device {
 	struct mutex move_mutex;
 	struct mutex work_mutex;
 	struct ubi_work *cur_work;
+	struct ubi_work *conso_work;
 	int wl_scheduled;
 	int conso_scheduled;
 	struct ubi_wl_entry **lookuptbl;
@@ -984,6 +985,7 @@ void ubi_work_close(struct ubi_device *ubi, int error);
 struct ubi_work *ubi_alloc_work(struct ubi_device *ubi);
 int ubi_work_flush(struct ubi_device *ubi);
 bool ubi_work_join_one(struct ubi_device *ubi);
+void ubi_work_join(struct ubi_device *ubi, struct ubi_work *wrk);
 struct ubi_work *ubi_alloc_erase_work(struct ubi_device *ubi,
 				      struct ubi_wl_entry *e,
 				      int torture);

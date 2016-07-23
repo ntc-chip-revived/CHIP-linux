@@ -1937,7 +1937,32 @@ int ubi_wl_get_peb(struct ubi_device *ubi, bool producing)
 	struct ubi_wl_entry *e;
 
 retry:
+	/*
+	 * When we run out of free PEBs and the consolidation worker is scheduled,
+	 * we need to give precedence to the consolidation worker.
+	 * Otherwise we'd consume a freshly erased PEB and the consolidation worker
+	 * starves.
+	 */
+	if (!producing && ubi->free_count < UBI_CONSO_RESERVED_PEBS && ubi->conso_work) {
+		struct ubi_work *wrk;
+
+		ubi_work_suspend(ubi);
+		wrk = ubi->conso_work;
+
+		if (wrk) {
+			spin_lock(&ubi->wl_lock);
+			kref_get(&wrk->ref);
+			spin_unlock(&ubi->wl_lock);
+		}
+
+		ubi_work_resume(ubi);
+
+		if (wrk)
+			ubi_work_join(ubi, wrk);
+	}
+
 	down_read(&ubi->fm_eba_sem);
+
 	spin_lock(&ubi->wl_lock);
 
 	if (!enough_free_pebs(ubi) && !producing) {
@@ -1952,8 +1977,7 @@ retry:
 		goto retry;
 	}
 	else if (!ubi->free_count && producing) {
-		ubi_err(ubi, "no free eraseblocks in producing case");
-		ubi_assert(0);
+		ubi_msg(ubi, "no free eraseblocks in producing case");
 		spin_unlock(&ubi->wl_lock);
 		return -ENOSPC;
 	}

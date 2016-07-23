@@ -367,6 +367,7 @@ static int consolidation_worker(struct ubi_device *ubi,
 	if (ret == -EAGAIN || ret == -ENOSPC)
 		ret = 0;
 
+	ubi->conso_work = NULL;
 	ubi->conso_scheduled = 0;
 	smp_wmb();
 
@@ -413,6 +414,7 @@ void ubi_conso_schedule(struct ubi_device *ubi)
 
 		wrk->func = &consolidation_worker;
 		INIT_LIST_HEAD(&wrk->list);
+		ubi->conso_work = wrk;
 		ubi_schedule_work(ubi, wrk);
 	} else
 		BUG();
