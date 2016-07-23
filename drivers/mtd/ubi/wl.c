@@ -1910,6 +1910,13 @@ static int produce_free_peb(struct ubi_device *ubi)
 		dbg_wl("do one work synchronously");
 		if (!ubi_work_join_one(ubi)) {
 			spin_lock(&ubi->wl_lock);
+
+			/* Work can finish before we tried to join. */
+			if (enough_free_pebs(ubi)) {
+				spin_lock(&ubi->wl_lock);
+				break;
+			}
+
 			/* Nothing to do. We have to give up. */
 			return -ENOSPC;
 		}
