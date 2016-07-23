@@ -371,9 +371,6 @@ static int consolidation_worker(struct ubi_device *ubi,
 	ubi->conso_scheduled = 0;
 	smp_wmb();
 
-	if (ubi_conso_consolidation_needed(ubi))
-		ubi_conso_schedule(ubi);
-
 	return ret;
 }
 
