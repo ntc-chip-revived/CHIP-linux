@@ -330,6 +330,7 @@ struct ubi_volume {
 	int exclusive;
 	int metaonly;
 
+	int avail_lebs;
 	int reserved_pebs;
 	int vol_type;
 	int leb_size;
@@ -355,6 +356,7 @@ struct ubi_volume {
 	unsigned int updating:1;
 	unsigned int changing_leb:1;
 	unsigned int direct_writes:1;
+	unsigned int mlc_safe:1;
 };
 
 /**
@@ -835,7 +837,7 @@ int ubi_check_pattern(const void *buf, uint8_t patt, int size);
 
 static inline bool ubi_leb_valid(struct ubi_volume *vol, int lnum)
 {
-	return lnum >= 0 && lnum < vol->reserved_pebs;
+	return lnum >= 0 && lnum < vol->avail_lebs;
 }
 
 /* eba.c */

@@ -546,6 +546,7 @@ static int init_volumes(struct ubi_device *ubi,
 			return -ENOMEM;
 
 		vol->reserved_pebs = be32_to_cpu(vtbl[i].reserved_pebs);
+		vol->avail_lebs = vol->reserved_pebs;
 		vol->alignment = be32_to_cpu(vtbl[i].alignment);
 		vol->data_pad = be32_to_cpu(vtbl[i].data_pad);
 		vol->upd_marker = vtbl[i].upd_marker;
@@ -581,7 +582,7 @@ static int init_volumes(struct ubi_device *ubi,
 		 * data is stored there. So assume the whole volume is used.
 		 */
 		if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
-			vol->used_ebs = vol->reserved_pebs;
+			vol->used_ebs = vol->avail_lebs;
 			vol->last_eb_bytes = vol->usable_leb_size;
 			vol->used_bytes =
 				(long long)vol->used_ebs * vol->usable_leb_size;
@@ -626,14 +627,15 @@ static int init_volumes(struct ubi_device *ubi,
 		return -ENOMEM;
 
 	vol->reserved_pebs = UBI_LAYOUT_VOLUME_EBS;
+	vol->avail_lebs = vol->reserved_pebs;
 	vol->alignment = UBI_LAYOUT_VOLUME_ALIGN;
 	vol->vol_type = UBI_DYNAMIC_VOLUME;
 	vol->name_len = sizeof(UBI_LAYOUT_VOLUME_NAME) - 1;
 	memcpy(vol->name, UBI_LAYOUT_VOLUME_NAME, vol->name_len + 1);
-	vol->used_ebs = vol->reserved_pebs;
-	vol->last_eb_bytes = vol->reserved_pebs;
 	vol->leb_size = ubi->leb_size;
 	vol->usable_leb_size = vol->leb_size;
+	vol->used_ebs = vol->avail_lebs;
+	vol->last_eb_bytes = vol->avail_lebs;
 	vol->used_bytes =
 		(long long)vol->used_ebs * (vol->leb_size - vol->data_pad);
 	vol->vol_id = UBI_LAYOUT_VOLUME_ID;
@@ -672,11 +674,11 @@ static int check_av(const struct ubi_volume *vol,
 {
 	int err;
 
-	if (av->highest_lnum >= vol->reserved_pebs) {
+	if (av->highest_lnum >= vol->avail_lebs) {
 		err = 1;
 		goto bad;
 	}
-	if (av->leb_count > vol->reserved_pebs) {
+	if (av->leb_count > vol->avail_lebs) {
 		err = 2;
 		goto bad;
 	}
@@ -684,7 +686,7 @@ static int check_av(const struct ubi_volume *vol,
 		err = 3;
 		goto bad;
 	}
-	if (av->used_ebs > vol->reserved_pebs) {
+	if (av->used_ebs > vol->avail_lebs) {
 		err = 4;
 		goto bad;
 	}
@@ -742,7 +744,7 @@ static int check_attaching_info(const struct ubi_device *ubi,
 			continue;
 		}
 
-		if (vol->reserved_pebs == 0) {
+		if (vol->avail_lebs == 0) {
 			ubi_assert(i < ubi->vtbl_slots);
 
 			if (!av)

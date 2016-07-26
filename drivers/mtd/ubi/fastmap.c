@@ -1264,10 +1264,10 @@ static int ubi_write_fastmap(struct ubi_device *ubi,
 			vol->vol_type == UBI_STATIC_VOLUME);
 
 		feba = (struct ubi_fm_eba *)(fm_raw + fm_pos);
-		fm_pos += sizeof(*feba) + (sizeof(__be32) * vol->reserved_pebs);
+		fm_pos += sizeof(*feba) + (sizeof(__be32) * vol->avail_lebs);
 		ubi_assert(fm_pos <= ubi->fm_size);
 
-		for (j = 0; j < vol->reserved_pebs; j++)
+		for (j = 0; j < vol->avail_lebs; j++)
 			feba->pnum[j] = cpu_to_be32(ubi_eba_get_pnum(vol, j));
 
 		feba->reserved_pebs = cpu_to_be32(j);

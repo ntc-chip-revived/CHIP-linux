@@ -86,7 +86,7 @@ static ssize_t vol_attribute_show(struct device *dev,
 	spin_unlock(&ubi->volumes_lock);
 
 	if (attr == &attr_vol_reserved_ebs)
-		ret = sprintf(buf, "%d\n", vol->reserved_pebs);
+		ret = sprintf(buf, "%d\n", vol->avail_lebs);
 	else if (attr == &attr_vol_type) {
 		const char *tp;
 
@@ -218,8 +218,14 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	vol->alignment = req->alignment;
 	vol->data_pad  = vol->leb_size % vol->alignment;
 	vol->usable_leb_size = vol->leb_size - vol->data_pad;
-	vol->reserved_pebs = div_u64(req->bytes + vol->usable_leb_size - 1,
-				     vol->usable_leb_size);
+	vol->avail_lebs = div_u64(req->bytes + vol->usable_leb_size - 1,
+				  vol->usable_leb_size);
+
+	/*
+	 * We currenlty assume a 1:1 relationship between LEBs and PEBs.
+	 * This will change with MLC/TLC NAND support.
+	 */
+	vol->reserved_pebs = vol->avail_lebs;
 
 	/* Reserve physical eraseblocks */
 	if (vol->reserved_pebs > ubi->avail_pebs) {
@@ -258,7 +264,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	ubi_eba_set_table(vol, eba_tbl);
 
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
-		vol->used_ebs = vol->reserved_pebs;
+		vol->used_ebs = vol->avail_lebs;
 		vol->last_eb_bytes = vol->usable_leb_size;
 		vol->used_bytes =
 			(long long)vol->used_ebs * vol->usable_leb_size;
@@ -392,7 +398,7 @@ int ubi_remove_volume(struct ubi_volume_desc *desc, int no_vtbl)
 			goto out_err;
 	}
 
-	for (i = 0; i < vol->reserved_pebs; i++) {
+	for (i = 0; i < vol->avail_lebs; i++) {
 		err = ubi_eba_unmap_leb(ubi, vol, i);
 		if (err)
 			goto out_err;
@@ -513,7 +519,12 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 		spin_unlock(&ubi->volumes_lock);
 	}
 
+	/*
+	 * We currenlty assume a 1:1 relationship between LEBs and PEBs.
+	 * This will change with MLC/TLC NAND support.
+	 */
 	vol->reserved_pebs = reserved_pebs;
+	vol->avail_lebs = reserved_pebs;
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
 		vol->used_ebs = reserved_pebs;
 		vol->last_eb_bytes = vol->usable_leb_size;
@@ -728,7 +739,7 @@ static int self_check_volume(struct ubi_device *ubi, int vol_id)
 			ubi_err(ubi, "corrupted dynamic volume");
 			goto fail;
 		}
-		if (vol->used_ebs != vol->reserved_pebs) {
+		if (vol->used_ebs != vol->avail_lebs) {
 			ubi_err(ubi, "bad used_ebs");
 			goto fail;
 		}
@@ -741,7 +752,7 @@ static int self_check_volume(struct ubi_device *ubi, int vol_id)
 			goto fail;
 		}
 	} else {
-		if (vol->used_ebs < 0 || vol->used_ebs > vol->reserved_pebs) {
+		if (vol->used_ebs < 0 || vol->used_ebs > vol->avail_lebs) {
 			ubi_err(ubi, "bad used_ebs");
 			goto fail;
 		}

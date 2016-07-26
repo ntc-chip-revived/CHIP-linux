@@ -1321,21 +1321,21 @@ int self_check_eba(struct ubi_device *ubi, struct ubi_attach_info *ai_fastmap,
 		if (!vol)
 			continue;
 
-		scan_eba[i] = kmalloc(vol->reserved_pebs * sizeof(**scan_eba),
+		scan_eba[i] = kmalloc(vol->avail_lebs * sizeof(**scan_eba),
 				      GFP_KERNEL);
 		if (!scan_eba[i]) {
 			ret = -ENOMEM;
 			goto out_free;
 		}
 
-		fm_eba[i] = kmalloc(vol->reserved_pebs * sizeof(**fm_eba),
+		fm_eba[i] = kmalloc(vol->avail_lebs * sizeof(**fm_eba),
 				    GFP_KERNEL);
 		if (!fm_eba[i]) {
 			ret = -ENOMEM;
 			goto out_free;
 		}
 
-		for (j = 0; j < vol->reserved_pebs; j++)
+		for (j = 0; j < vol->avail_lebs; j++)
 			scan_eba[i][j] = fm_eba[i][j] = UBI_LEB_UNMAPPED;
 
 		av = ubi_find_av(ai_scan, idx2vol_id(ubi, i));
@@ -1352,7 +1352,7 @@ int self_check_eba(struct ubi_device *ubi, struct ubi_attach_info *ai_fastmap,
 		ubi_rb_for_each_entry(rb, aeb, &av->root, u.rb)
 			fm_eba[i][aeb->lnum] = aeb->pnum;
 
-		for (j = 0; j < vol->reserved_pebs; j++) {
+		for (j = 0; j < vol->avail_lebs; j++) {
 			if (scan_eba[i][j] != fm_eba[i][j]) {
 				if (scan_eba[i][j] == UBI_LEB_UNMAPPED ||
 					fm_eba[i][j] == UBI_LEB_UNMAPPED)
@@ -1484,7 +1484,7 @@ int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 			continue;
 
 		ubi_rb_for_each_entry(rb, aeb, &av->root, u.rb) {
-			if (aeb->lnum >= vol->reserved_pebs)
+			if (aeb->lnum >= vol->avail_lebs)
 				/*
 				 * This may happen in case of an unclean reboot
 				 * during re-size.

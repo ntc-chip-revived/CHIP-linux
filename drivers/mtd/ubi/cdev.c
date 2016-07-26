@@ -415,7 +415,7 @@ static long vol_cdev_ioctl(struct file *file, unsigned int cmd,
 			break;
 		}
 
-		rsvd_bytes = (long long)vol->reserved_pebs *
+		rsvd_bytes = (long long)vol->avail_lebs *
 					vol->usable_leb_size;
 		if (bytes < 0 || bytes > rsvd_bytes) {
 			err = -EINVAL;

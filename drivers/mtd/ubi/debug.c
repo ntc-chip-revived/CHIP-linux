@@ -109,6 +109,7 @@ void ubi_dump_vol_info(const struct ubi_volume *vol)
 	pr_err("Volume information dump:\n");
 	pr_err("\tvol_id          %d\n", vol->vol_id);
 	pr_err("\treserved_pebs   %d\n", vol->reserved_pebs);
+	pr_err("\tavail_lebs      %d\n", vol->avail_lebs);
 	pr_err("\talignment       %d\n", vol->alignment);
 	pr_err("\tdata_pad        %d\n", vol->data_pad);
 	pr_err("\tvol_type        %d\n", vol->vol_type);
