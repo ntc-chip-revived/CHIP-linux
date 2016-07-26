@@ -266,6 +266,8 @@ struct ubi_fm_pool {
 	int max_size;
 };
 
+struct ubi_eba_table;
+
 /**
  * struct ubi_volume - UBI volume description data structure.
  * @dev: device object to make use of the the Linux device model
@@ -346,7 +348,7 @@ struct ubi_volume {
 	long long upd_received;
 	void *upd_buf;
 
-	int *eba_tbl;
+	struct ubi_eba_table *eba_tbl;
 	unsigned int checked:1;
 	unsigned int corrupted:1;
 	unsigned int upd_marker:1;
@@ -832,6 +834,11 @@ void ubi_calculate_reserved(struct ubi_device *ubi);
 int ubi_check_pattern(const void *buf, uint8_t patt, int size);
 
 /* eba.c */
+struct ubi_eba_table *ubi_eba_create_table(int nlebs);
+void ubi_eba_destroy_table(struct ubi_eba_table *tbl);
+void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
+			int nentries);
+void ubi_eba_set_table(struct ubi_volume *vol, struct ubi_eba_table *tbl);
 int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum);
 void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum);
 int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,

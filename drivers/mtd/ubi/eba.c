@@ -46,6 +46,16 @@
 #include <linux/err.h>
 #include "ubi.h"
 
+struct ubi_eba_desc {
+	union {
+		int pnum;
+	};
+};
+
+struct ubi_eba_table {
+	struct ubi_eba_desc *descs;
+};
+
 /* Number of physical eraseblocks reserved for atomic LEB change operation */
 #define EBA_RESERVED_PEBS 1
 
@@ -1372,32 +1382,36 @@ out_free:
 
 int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
 {
-	return vol->eba_tbl[lnum];
+	return vol->eba_tbl->descs[lnum].pnum;
 }
 
 void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
 {
-	vol->eba_tbl[lnum] = pnum;
+	vol->eba_tbl->descs[lnum].pnum = pnum;
 }
 
-static struct ubi_eba_table *create_eba_table(int nlebs)
+struct ubi_eba_table *ubi_eba_create_table(int nlebs)
 {
 	struct ubi_eba_table *tbl;
+	int i;
 
 	tbl = kzalloc(sizeof(*tbl), GFP_KERNEL);
 	if (!tbl)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	tbl->descs = kmalloc(nlebs * sizeof(*tbl->descs), GFP_KERNEL);
 	if (!tbl->descs) {
 		kfree(tbl);
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 	}
+
+	for (i = 0; i < nlebs; i++)
+		tbl->descs[i].pnum = UBI_LEB_UNMAPPED;
 
 	return tbl;
 }
 
-static void detroy_eba_table(struct ubi_eba_table *tbl)
+void ubi_eba_destroy_table(struct ubi_eba_table *tbl)
 {
 	if (!tbl)
 		return;
@@ -1406,50 +1420,21 @@ static void detroy_eba_table(struct ubi_eba_table *tbl)
 	kfree(tbl);
 }
 
-int ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
+void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
+			int nentries)
 {
-	struct ubi_eba_table *tbl;
 	int i;
 
-	ubi_assert(!vol->eba_tbl);
+	ubi_assert(dst && vol && vol->eba_tbl);
 
-	tbl = create_eba_table(nlebs);
-	if (!tbl)
-		return -ENOMEM;
+	for (i = 0; i < nentries; i++)
+		dst->descs[i].pnum = vol->eba_tbl->descs[i].pnum;
+}
 
-	for (i = 0; i < nlebs; i++)
-		tbl[i] = UBI_LEB_UNMAPPED;
-
+void ubi_eba_set_table(struct ubi_volume *vol, struct ubi_eba_table *tbl)
+{
+	ubi_eba_destroy_table(vol->eba_tbl);
 	vol->eba_tbl = tbl;
-
-	return 0;
-}
-
-void ubi_eba_destroy_table(struct ubi_volume *vol)
-{
-	destroy_eba_table(vol->eba_tbl);
-}
-
-int ubi_eba_resize_table(struct ubi_volume *vol, int nlebs)
-{
-	struct ubi_eba_table *new_tbl, old_tbl;
-	int old_nlebs = vol->reserved_pebs;
-	int min_nlebs = min(nlebs, old_nlebs);
-	int i;
-
-	old_tbl = vol->eba_tbl;
-	new_tbl = ubi_eba_create_table(nlebs);
-	if (!new_tbl)
-		return -ENOMEM;
-
-	for (i = 0; i < min_nlebs; i++)
-		new_tbl[i] = old_tbl[i];
-
-	for (i = old_nlebs; i < nlebs; i++)
-		new_tbl[i] = UBI_LEB_UNMAPPED;
-
-	vol->eba_tbl = new_tbl;
-	detroy_eba_table(old_tbl);
 }
 
 /**
@@ -1462,7 +1447,7 @@ int ubi_eba_resize_table(struct ubi_volume *vol, int nlebs)
  */
 int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 {
-	int i, j, err, num_volumes;
+	int i, err, num_volumes;
 	struct ubi_ainf_volume *av;
 	struct ubi_volume *vol;
 	struct ubi_ainf_peb *aeb;
@@ -1478,21 +1463,21 @@ int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	num_volumes = ubi->vtbl_slots + UBI_INT_VOL_COUNT;
 
 	for (i = 0; i < num_volumes; i++) {
+		struct ubi_eba_table *tbl;
+
 		vol = ubi->volumes[i];
 		if (!vol)
 			continue;
 
 		cond_resched();
 
-		vol->eba_tbl = kmalloc(vol->reserved_pebs * sizeof(int),
-				       GFP_KERNEL);
-		if (!vol->eba_tbl) {
-			err = -ENOMEM;
+		tbl = ubi_eba_create_table(vol->reserved_pebs);
+		if (IS_ERR(tbl)) {
+			err = PTR_ERR(tbl);
 			goto out_free;
 		}
 
-		for (j = 0; j < vol->reserved_pebs; j++)
-			ubi_eba_set_pnum(vol, j, UBI_LEB_UNMAPPED);
+		ubi_eba_set_table(vol, tbl);
 
 		av = ubi_find_av(ai, idx2vol_id(ubi, i));
 		if (!av)
@@ -1543,8 +1528,8 @@ out_free:
 	for (i = 0; i < num_volumes; i++) {
 		if (!ubi->volumes[i])
 			continue;
-		kfree(ubi->volumes[i]->eba_tbl);
-		ubi->volumes[i]->eba_tbl = NULL;
+
+		ubi_eba_set_table(ubi->volumes[i], NULL);
 	}
 	return err;
 }
