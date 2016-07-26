@@ -255,7 +255,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	}
 
 	for (i = 0; i < vol->reserved_pebs; i++)
-		vol->eba_tbl[i] = UBI_LEB_UNMAPPED;
+		ubi_eba_set_pnum(vol, i, UBI_LEB_UNMAPPED);
 
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
 		vol->used_ebs = vol->reserved_pebs;
