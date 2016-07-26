@@ -1380,6 +1380,78 @@ void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
 	vol->eba_tbl[lnum] = pnum;
 }
 
+static struct ubi_eba_table *create_eba_table(int nlebs)
+{
+	struct ubi_eba_table *tbl;
+
+	tbl = kzalloc(sizeof(*tbl), GFP_KERNEL);
+	if (!tbl)
+		return NULL;
+
+	tbl->descs = kmalloc(nlebs * sizeof(*tbl->descs), GFP_KERNEL);
+	if (!tbl->descs) {
+		kfree(tbl);
+		return NULL;
+	}
+
+	return tbl;
+}
+
+static void detroy_eba_table(struct ubi_eba_table *tbl)
+{
+	if (!tbl)
+		return;
+
+	kfree(tbl->descs);
+	kfree(tbl);
+}
+
+int ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
+{
+	struct ubi_eba_table *tbl;
+	int i;
+
+	ubi_assert(!vol->eba_tbl);
+
+	tbl = create_eba_table(nlebs);
+	if (!tbl)
+		return -ENOMEM;
+
+	for (i = 0; i < nlebs; i++)
+		tbl[i] = UBI_LEB_UNMAPPED;
+
+	vol->eba_tbl = tbl;
+
+	return 0;
+}
+
+void ubi_eba_destroy_table(struct ubi_volume *vol)
+{
+	destroy_eba_table(vol->eba_tbl);
+}
+
+int ubi_eba_resize_table(struct ubi_volume *vol, int nlebs)
+{
+	struct ubi_eba_table *new_tbl, old_tbl;
+	int old_nlebs = vol->reserved_pebs;
+	int min_nlebs = min(nlebs, old_nlebs);
+	int i;
+
+	old_tbl = vol->eba_tbl;
+	new_tbl = ubi_eba_create_table(nlebs);
+	if (!new_tbl)
+		return -ENOMEM;
+
+	for (i = 0; i < min_nlebs; i++)
+		new_tbl[i] = old_tbl[i];
+
+	for (i = old_nlebs; i < nlebs; i++)
+		new_tbl[i] = UBI_LEB_UNMAPPED;
+
+	vol->eba_tbl = new_tbl;
+	detroy_eba_table(old_tbl);
+}
+
 /**
  * ubi_eba_init - initialize the EBA sub-system using attaching information.
  * @ubi: UBI device description object
