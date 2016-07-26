@@ -217,10 +217,12 @@
  *
  * @UBI_DYNAMIC_VOLUME: dynamic volume
  * @UBI_STATIC_VOLUME:  static volume
+ * @UBI_DYN_MLC_VOLUME: dynamic and MLC aware volume
  */
 enum {
 	UBI_DYNAMIC_VOLUME = 3,
 	UBI_STATIC_VOLUME  = 4,
+	UBI_DYN_MLC_VOLUME = 5,
 };
 
 /*

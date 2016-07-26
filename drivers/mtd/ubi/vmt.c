@@ -92,6 +92,8 @@ static ssize_t vol_attribute_show(struct device *dev,
 
 		if (vol->vol_type == UBI_DYNAMIC_VOLUME)
 			tp = "dynamic";
+		else if (vol->vol_type == UBI_DYN_MLC_VOLUME)
+			tp = "dynamic-MLC";
 		else
 			tp = "static";
 		ret = sprintf(buf, "%s\n", tp);
@@ -140,6 +142,79 @@ static void vol_release(struct device *dev)
 
 	kfree(vol->eba_tbl);
 	kfree(vol);
+}
+
+static int ubi_calc_leb_size(struct ubi_volume *vol)
+{
+	struct ubi_device *ubi = vol->ubi;
+	int lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
+
+	if (lebs_per_cpeb < 2 || vol->vol_type != UBI_DYN_MLC_VOLUME)
+		return ubi->leb_size;
+
+	return (ubi->peb_size / lebs_per_cpeb) - ubi->leb_start;
+}
+
+static int ubi_calc_avail_lebs(struct ubi_volume *vol)
+{
+	int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
+	int rsvd_pebs = vol->reserved_pebs;
+	int rsvd_lebs;
+
+	/* We don't need consolidation in this case. */
+	if (lebs_per_cpeb < 2 || vol->vol_type != UBI_DYN_MLC_VOLUME)
+		return rsvd_pebs;
+
+	/*
+	 * The minimum number of PEBs required for consolidation is 17 PEBs
+	 * (16 SLC mode PEBs + one for the consolidation process).
+	 * If we are below this limit, write all LEBs in SLC mode.
+	 */
+	if (rsvd_pebs < 16 + 1)
+		return rsvd_pebs;
+
+	/* Reserve 1 PEB for consolidation. */
+	rsvd_pebs -= 1;
+
+	rsvd_lebs = rsvd_pebs - 17;
+
+	return 0;
+}
+
+static int ubi_calc_rsvd_pebs(struct ubi_volume *vol)
+{
+	int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
+	int rsvd_lebs = vol->avail_lebs;
+	int rsvd_pebs;
+
+	/* We don't need consolidation in this case. */
+	if (lebs_per_cpeb < 2 || vol->vol_type != UBI_DYN_MLC_VOLUME)
+		return rsvd_lebs;
+
+	/*
+	 * Reserve 5% to store LEBs in SLC mode so that we don't end-up
+	 * consolidating/invalidating the same LEBs over and over.
+	 */
+	rsvd_pebs = DIV_ROUND_UP(rsvd_lebs, 20);
+
+	/* Low limit is 16 PEBs */
+	if (rsvd_pebs < 16)
+		rsvd_pebs = 16;
+
+	/* Reserve 1 PEB for consolidation. */
+	rsvd_pebs += 1;
+
+	/* Now consider we'll store the remaining LEBs in consolidated PEBs. */
+	rsvd_pebs += DIV_ROUND_UP(rsvd_lebs + 1 - rsvd_pebs, lebs_per_cpeb);
+
+	/*
+	 * If we reserve more PEBs than LEBs this means we'd better store all
+	 * LEBs in SLC mode.
+	 */
+	if (rsvd_pebs > rsvd_lebs)
+		return rsvd_lebs;
+
+	return rsvd_pebs;
 }
 
 /**
@@ -207,12 +282,19 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 			goto out_unlock;
 		}
 
+	vol->vol_type  = req->vol_type;
+	vol->ubi = ubi;
+	vol->vol_id    = vol_id;
+	vol->vol_type  = req->vol_type;
+	vol->name_len  = req->name_len;
+	memcpy(vol->name, req->name, vol->name_len);
+
 	/*
 	 * Volume LEB size is currently PEB size - (size reserved for the EC
 	 * and VID headers). This will change with MLC/TLC NAND support and
 	 * the LEB consolidation concept.
 	 */
-	vol->leb_size = ubi->leb_size;
+	vol->leb_size = ubi_calc_leb_size(vol);
 
 	/* Calculate how many eraseblocks are requested */
 	vol->alignment = req->alignment;
@@ -225,7 +307,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	 * We currenlty assume a 1:1 relationship between LEBs and PEBs.
 	 * This will change with MLC/TLC NAND support.
 	 */
-	vol->reserved_pebs = vol->avail_lebs;
+	vol->reserved_pebs = ubi_calc_rsvd_pebs(vol);
 
 	/* Reserve physical eraseblocks */
 	if (vol->reserved_pebs > ubi->avail_pebs) {
@@ -240,12 +322,6 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	ubi->avail_pebs -= vol->reserved_pebs;
 	ubi->rsvd_pebs += vol->reserved_pebs;
 	spin_unlock(&ubi->volumes_lock);
-
-	vol->vol_id    = vol_id;
-	vol->vol_type  = req->vol_type;
-	vol->name_len  = req->name_len;
-	memcpy(vol->name, req->name, vol->name_len);
-	vol->ubi = ubi;
 
 	/*
 	 * Finish all pending erases because there may be some LEBs belonging
@@ -263,7 +339,8 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 
 	ubi_eba_set_table(vol, eba_tbl);
 
-	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
+	if (vol->vol_type == UBI_DYNAMIC_VOLUME ||
+	    vol->vol_type == UBI_DYN_MLC_VOLUME) {
 		vol->used_ebs = vol->avail_lebs;
 		vol->last_eb_bytes = vol->usable_leb_size;
 		vol->used_bytes =
@@ -309,6 +386,8 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	vtbl_rec.name_len      = cpu_to_be16(vol->name_len);
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME)
 		vtbl_rec.vol_type = UBI_VID_DYNAMIC;
+	else if (vol->vol_type == UBI_DYN_MLC_VOLUME)
+		vtbl_rec.vol_type = UBI_VID_DYN_MLC;
 	else
 		vtbl_rec.vol_type = UBI_VID_STATIC;
 	memcpy(vtbl_rec.name, vol->name, vol->name_len);
@@ -775,6 +854,8 @@ static int self_check_volume(struct ubi_device *ubi, int vol_id)
 	name       = &ubi->vtbl[vol_id].name[0];
 	if (ubi->vtbl[vol_id].vol_type == UBI_VID_DYNAMIC)
 		vol_type = UBI_DYNAMIC_VOLUME;
+	else if (ubi->vtbl[vol_id].vol_type == UBI_VID_DYN_MLC)
+		vol_type = UBI_DYN_MLC_VOLUME;
 	else
 		vol_type = UBI_STATIC_VOLUME;
 

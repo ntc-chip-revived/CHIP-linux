@@ -51,10 +51,12 @@
  *
  * @UBI_VID_DYNAMIC: dynamic volume
  * @UBI_VID_STATIC: static volume
+ * @UBI_VID_DYN_MLC: dynamic and MLC aware volume
  */
 enum {
 	UBI_VID_DYNAMIC = 1,
-	UBI_VID_STATIC  = 2
+	UBI_VID_STATIC  = 2,
+	UBI_VID_DYN_MLC = 3,
 };
 
 /*
