@@ -1230,7 +1230,7 @@ static int erase_worker(struct ubi_device *ubi, struct ubi_work *wl_wrk,
  * occurred to this @pnum and it has to be tested. This function returns zero
  * in case of success, and a negative error code in case of failure.
  */
-int ubi_wl_put_peb(struct ubi_device *ubi, int pnum, int torture)
+static int wl_put_peb(struct ubi_device *ubi, int pnum, int torture, bool sync)
 {
 	int err;
 	struct ubi_wl_entry *e;
@@ -1302,20 +1302,35 @@ retry:
 	}
 	spin_unlock(&ubi->wl_lock);
 
-	wrk = ubi_alloc_erase_work(ubi, e, torture);
-	if (!wrk) {
-		spin_lock(&ubi->wl_lock);
-		wl_tree_add(e, &ubi->used);
-		spin_unlock(&ubi->wl_lock);
+	if (sync) {
+		up_read(&ubi->fm_protect);
+		return do_sync_erase(ubi, e, torture);
+	} else {
+		wrk = ubi_alloc_erase_work(ubi, e, torture);
+		if (!wrk) {
+			spin_lock(&ubi->wl_lock);
+			wl_tree_add(e, &ubi->used);
+			spin_unlock(&ubi->wl_lock);
+		}
+		up_read(&ubi->fm_protect);
+
+		if (!wrk)
+			return -ENOMEM;
+
+		ubi_schedule_work(ubi, wrk);
 	}
-	up_read(&ubi->fm_protect);
-
-	if (!wrk)
-		return -ENOMEM;
-
-	ubi_schedule_work(ubi, wrk);
 
 	return 0;
+}
+
+int ubi_wl_put_peb(struct ubi_device *ubi, int pnum, int torture)
+{
+	return wl_put_peb(ubi, pnum, torture, false);
+}
+
+int ubi_wl_put_peb_sync(struct ubi_device *ubi, int pnum, int torture)
+{
+	return wl_put_peb(ubi, pnum, torture, true);
 }
 
 /**

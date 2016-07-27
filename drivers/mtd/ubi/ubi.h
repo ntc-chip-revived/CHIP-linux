@@ -962,6 +962,7 @@ static inline int ubi_conso_sync(struct ubi_device *ubi) { return 0; }
 int ubi_wl_get_peb(struct ubi_device *ubi, bool producing);
 int ubi_wl_flush(struct ubi_device *ubi);
 int ubi_wl_put_peb(struct ubi_device *ubi, int pnum, int torture);
+int ubi_wl_put_peb_sync(struct ubi_device *ubi, int pnum, int torture);
 int ubi_wl_scrub_peb(struct ubi_device *ubi, int pnum);
 int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai);
 void ubi_wl_close(struct ubi_device *ubi);
