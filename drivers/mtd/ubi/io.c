@@ -1206,6 +1206,14 @@ int ubi_io_read_vid_hdrs(struct ubi_device *ubi, int pnum,
 					err = UBI_IO_FF;
 				else
 					err = UBI_IO_FF_BITFLIPS;
+
+				/*
+				 * Propagate UBI_IO_FF/_BITFLIPS only for the first VID header,
+				 * otherwise UBI will treat the whole PEB as empty.
+				 */
+				if (i)
+					err = 0;
+
 				break;
 			}
 
