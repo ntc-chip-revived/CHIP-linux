@@ -92,8 +92,6 @@ static ssize_t vol_attribute_show(struct device *dev,
 
 		if (vol->vol_type == UBI_DYNAMIC_VOLUME)
 			tp = "dynamic";
-		else if (vol->vol_type == UBI_DYN_MLC_VOLUME)
-			tp = "dynamic-MLC";
 		else
 			tp = "static";
 		ret = sprintf(buf, "%s\n", tp);
@@ -144,12 +142,12 @@ static void vol_release(struct device *dev)
 	kfree(vol);
 }
 
-static int ubi_calc_leb_size(struct ubi_volume *vol)
+int ubi_calc_leb_size(struct ubi_volume *vol)
 {
 	struct ubi_device *ubi = vol->ubi;
 	int lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
 
-	if (lebs_per_cpeb < 2 || vol->vol_type != UBI_DYN_MLC_VOLUME)
+	if (lebs_per_cpeb < 2 || !vol->mlc_safe)
 		return ubi->leb_size;
 
 	return (ubi->peb_size / lebs_per_cpeb) - ubi->leb_start;
@@ -163,7 +161,7 @@ static int ubi_calc_avail_lebs(struct ubi_volume *vol, int pebs)
 	int avail_lebs;
 
 	/* We don't need consolidation in this case. */
-	if (lebs_per_cpeb < 2 || vol->vol_type != UBI_DYN_MLC_VOLUME)
+	if (lebs_per_cpeb < 2 || !vol->mlc_safe)
 		return pebs;
 
 	/*
@@ -197,7 +195,7 @@ int ubi_calc_rsvd_pebs(struct ubi_volume *vol, int lebs)
 	int rsvd_pebs;
 
 	/* We don't need consolidation in this case. */
-	if (lebs_per_cpeb < 2 || vol->vol_type != UBI_DYN_MLC_VOLUME)
+	if (lebs_per_cpeb < 2 || vol->mlc_safe)
 		return lebs;
 
 	/*
@@ -296,6 +294,14 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	memcpy(vol->name, req->name, vol->name_len);
 
 	/*
+	 * FIXME: this should be selected by the user instead of being forced
+	 * here for all dynamic volumes.
+	 */
+	if (vol->vol_type == UBI_DYNAMIC_VOLUME &&
+	    mtd_pairing_groups_per_eb(ubi->mtd) > 1)
+		vol->mlc_safe = true;
+
+	/*
 	 * Volume LEB size is currently PEB size - (size reserved for the EC
 	 * and VID headers). This will change with MLC/TLC NAND support and
 	 * the LEB consolidation concept.
@@ -341,8 +347,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 
 	ubi_eba_set_table(vol, eba_tbl);
 
-	if (vol->vol_type == UBI_DYNAMIC_VOLUME ||
-	    vol->vol_type == UBI_DYN_MLC_VOLUME) {
+	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
 		vol->used_ebs = vol->avail_lebs;
 		vol->last_eb_bytes = vol->usable_leb_size;
 		vol->used_bytes =
@@ -388,10 +393,14 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	vtbl_rec.name_len      = cpu_to_be16(vol->name_len);
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME)
 		vtbl_rec.vol_type = UBI_VID_DYNAMIC;
-	else if (vol->vol_type == UBI_DYN_MLC_VOLUME)
-		vtbl_rec.vol_type = UBI_VID_DYN_MLC;
 	else
 		vtbl_rec.vol_type = UBI_VID_STATIC;
+
+	if (vol->mlc_safe) {
+		vtbl_rec.flags |= UBI_VTBL_MLC_SAFE_FLG;
+		vtbl_rec.avail_lebs = cpu_to_be32(vol->avail_lebs);
+	}
+
 	memcpy(vtbl_rec.name, vol->name, vol->name_len);
 
 	err = ubi_change_vtbl_record(ubi, vol_id, &vtbl_rec);
@@ -581,6 +590,10 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 	/* Change volume table record */
 	vtbl_rec = ubi->vtbl[vol_id];
 	vtbl_rec.reserved_pebs = cpu_to_be32(reserved_pebs);
+	if (vol->mlc_safe) {
+		vtbl_rec.flags |= UBI_VTBL_MLC_SAFE_FLG;
+		vtbl_rec.avail_lebs = cpu_to_be32(vol->avail_lebs);
+	}
 	err = ubi_change_vtbl_record(ubi, vol_id, &vtbl_rec);
 	if (err)
 		goto out_acc;
@@ -606,8 +619,7 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 	 */
 	vol->reserved_pebs = reserved_pebs;
 	vol->avail_lebs = ubi_calc_avail_lebs(vol, reserved_pebs);
-	if (vol->vol_type == UBI_DYNAMIC_VOLUME ||
-	    vol->vol_type == UBI_DYN_MLC_VOLUME) {
+	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
 		vol->used_ebs = vol->avail_lebs;
 		vol->last_eb_bytes = vol->usable_leb_size;
 		vol->used_bytes =
@@ -857,8 +869,6 @@ static int self_check_volume(struct ubi_device *ubi, int vol_id)
 	name       = &ubi->vtbl[vol_id].name[0];
 	if (ubi->vtbl[vol_id].vol_type == UBI_VID_DYNAMIC)
 		vol_type = UBI_DYNAMIC_VOLUME;
-	else if (ubi->vtbl[vol_id].vol_type == UBI_VID_DYN_MLC)
-		vol_type = UBI_DYN_MLC_VOLUME;
 	else
 		vol_type = UBI_STATIC_VOLUME;
 

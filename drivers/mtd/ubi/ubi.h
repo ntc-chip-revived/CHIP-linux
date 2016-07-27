@@ -817,6 +817,7 @@ int ubi_rename_volumes(struct ubi_device *ubi, struct list_head *rename_list);
 int ubi_add_volume(struct ubi_device *ubi, struct ubi_volume *vol);
 void ubi_free_volume(struct ubi_device *ubi, struct ubi_volume *vol);
 int ubi_calc_rsvd_pebs(struct ubi_volume *vol, int lebs);
+int ubi_calc_leb_size(struct ubi_volume *vol);
 
 /* upd.c */
 int ubi_start_update(struct ubi_device *ubi, struct ubi_volume *vol,

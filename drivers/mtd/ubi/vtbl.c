@@ -545,15 +545,24 @@ static int init_volumes(struct ubi_device *ubi,
 		if (!vol)
 			return -ENOMEM;
 
+		vol->ubi = ubi;
+		if (vtbl[i].flags & UBI_VTBL_MLC_SAFE_FLG)
+			vol->mlc_safe = true;
+
 		vol->reserved_pebs = be32_to_cpu(vtbl[i].reserved_pebs);
-		vol->avail_lebs = vol->reserved_pebs;
+
+		if (vol->mlc_safe)
+			vol->avail_lebs = be32_to_cpu(vtbl[i].avail_lebs);
+		else
+			vol->avail_lebs = vol->reserved_pebs;
+
 		vol->alignment = be32_to_cpu(vtbl[i].alignment);
 		vol->data_pad = be32_to_cpu(vtbl[i].data_pad);
 		vol->upd_marker = vtbl[i].upd_marker;
 		vol->vol_type = vtbl[i].vol_type == UBI_VID_DYNAMIC ?
 					UBI_DYNAMIC_VOLUME : UBI_STATIC_VOLUME;
 		vol->name_len = be16_to_cpu(vtbl[i].name_len);
-		vol->leb_size = ubi->leb_size;
+		vol->leb_size = ubi_calc_leb_size(vol);
 		vol->usable_leb_size = vol->leb_size - vol->data_pad;
 		memcpy(vol->name, vtbl[i].name, vol->name_len);
 		vol->name[vol->name_len] = '\0';
@@ -574,7 +583,6 @@ static int init_volumes(struct ubi_device *ubi,
 		ubi_assert(!ubi->volumes[i]);
 		ubi->volumes[i] = vol;
 		ubi->vol_count += 1;
-		vol->ubi = ubi;
 		reserved_pebs += vol->reserved_pebs;
 
 		/*

@@ -142,6 +142,7 @@ void ubi_dump_vtbl_record(const struct ubi_vtbl_record *r, int idx)
 
 	pr_err("Volume table record %d dump:\n", idx);
 	pr_err("\treserved_pebs   %d\n", be32_to_cpu(r->reserved_pebs));
+	pr_err("\avail_lebs       %d\n", be32_to_cpu(r->avail_lebs));
 	pr_err("\talignment       %d\n", be32_to_cpu(r->alignment));
 	pr_err("\tdata_pad        %d\n", be32_to_cpu(r->data_pad));
 	pr_err("\tvol_type        %d\n", (int)r->vol_type);

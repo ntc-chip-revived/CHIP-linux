@@ -56,7 +56,6 @@
 enum {
 	UBI_VID_DYNAMIC = 1,
 	UBI_VID_STATIC  = 2,
-	UBI_VID_DYN_MLC = 3,
 };
 
 /*
@@ -94,6 +93,7 @@ enum {
  */
 enum {
 	UBI_VTBL_AUTORESIZE_FLG = 0x01,
+	UBI_VTBL_MLC_SAFE_FLG	= 0x02,
 };
 
 /*
@@ -336,8 +336,10 @@ struct ubi_vid_hdr {
  * @upd_marker: if volume update was started but not finished
  * @name_len: volume name length
  * @name: the volume name
- * @flags: volume flags (%UBI_VTBL_AUTORESIZE_FLG)
- * @padding: reserved, zeroes
+ * @flags: volume flags (%UBI_VTBL_AUTORESIZE_FLG, %UBI_VTBL_MLC_SAFE_FLG)
+ * @padding1: reserved, zeroes
+ * @avail_lebs: number of LEBs available
+ * @padding2: reserved, zeroes
  * @crc: a CRC32 checksum of the record
  *
  * The volume table records are stored in the volume table, which is stored in
@@ -373,7 +375,9 @@ struct ubi_vtbl_record {
 	__be16  name_len;
 	__u8    name[UBI_VOL_NAME_MAX+1];
 	__u8    flags;
-	__u8    padding[23];
+	__u8    padding1[3];
+	__be32	avail_lebs;
+	__u8    padding2[16];
 	__be32  crc;
 } __packed;
 
