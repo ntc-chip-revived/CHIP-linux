@@ -909,7 +909,7 @@ static long ubi_cdev_ioctl(struct file *file, unsigned int cmd,
 	/* Re-size volume command */
 	case UBI_IOCRSVOL:
 	{
-		int pebs;
+		int pebs, lebs;
 		struct ubi_rsvol_req req;
 
 		dbg_gen("re-size volume");
@@ -929,8 +929,8 @@ static long ubi_cdev_ioctl(struct file *file, unsigned int cmd,
 			break;
 		}
 
-		pebs = div_u64(req.bytes + desc->vol->usable_leb_size - 1,
-			       desc->vol->usable_leb_size);
+		lebs = DIV_ROUND_UP_ULL(req.bytes, desc->vol->usable_leb_size);
+		pebs = ubi_calc_rsvd_pebs(desc->vol, lebs);
 
 		mutex_lock(&ubi->device_mutex);
 		err = ubi_resize_volume(desc, pebs);
