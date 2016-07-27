@@ -349,14 +349,15 @@ static int consolidation_worker(struct ubi_device *ubi,
 		return 0;
 
 	ret = consolidate_lebs(ubi);
-	if (ret == -EAGAIN)
-		ret = 0;
 
 	ubi->conso_scheduled = 0;
 	smp_wmb();
 
-	if (ubi_conso_consolidation_needed(ubi))
+	if (!ret && ubi_conso_consolidation_needed(ubi))
 		ubi_conso_schedule(ubi);
+
+	if (ret == -EAGAIN)
+		ret = 0;
 
 	return ret;
 }
