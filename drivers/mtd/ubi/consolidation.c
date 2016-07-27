@@ -532,7 +532,7 @@
 int ubi_conso_init(struct ubi_device *ubi)
 {
 	/*
-	 * We're not interacting with an MLC/TLC NAND or this not does not
+	 * We're not interacting with an MLC/TLC NAND or this NAND not does not
 	 * expose its page pairing scheme.
 	 */
 	if (mtd_pairing_groups_per_eb(ubi->mtd) < 2)

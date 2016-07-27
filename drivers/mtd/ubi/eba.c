@@ -46,14 +46,42 @@
 #include <linux/err.h>
 #include "ubi.h"
 
+struct ubi_consolidated_peb {
+	int pnum;
+	int lnums[];
+};
+
 struct ubi_eba_desc {
 	union {
 		int pnum;
+		struct ubi_consolidated_peb *cpeb;
 	};
 };
 
+/**
+ * ubi_eba_table - UBI eraseblock association table
+ * @descs: array of descriptors (one entry for each available LEB)
+ * @consolidated: bitmap encoding whether a LEB is consolidated or not
+ * @hot: list of hot LEBs. Contains X elements, where X is the number of
+ *	 minimum number of non-consolidated LEBs. Used to implement an
+ *	 LRU mechanism to avoid consolidating LEBs that are regularly
+ *	 updated/unmapped/mapped.
+ * @cooling: when an element is evicted from the hot list it is placed in the
+ *	     cooling list to avoid unnecessary consolidations. Those LEBs can
+ *	     still be consolidated under pressure (when the UBI user needs to
+ *	     manipulate an already consolidated PEB).
+ * @cold: bitmap referencing all cold LEBs that are not already frozen. These
+ *	  LEBs are candidates for consolidation.
+ * @frozen: bitmap referencing all consolidated LEBs that are part of PEBs
+ *	    containing only valid LEBs.
+ */
 struct ubi_eba_table {
 	struct ubi_eba_desc *descs;
+	unsigned long *consolidated;
+	struct list_head hot;
+	struct list_head cooling;
+	unsigned long *cold;
+	unsigned long *frozen;
 };
 
 /* Number of physical eraseblocks reserved for atomic LEB change operation */
