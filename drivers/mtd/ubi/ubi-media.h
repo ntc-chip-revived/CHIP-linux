@@ -51,11 +51,10 @@
  *
  * @UBI_VID_DYNAMIC: dynamic volume
  * @UBI_VID_STATIC: static volume
- * @UBI_VID_DYN_MLC: dynamic and MLC aware volume
  */
 enum {
 	UBI_VID_DYNAMIC = 1,
-	UBI_VID_STATIC  = 2,
+	UBI_VID_STATIC  = 2
 };
 
 /*
@@ -167,6 +166,8 @@ struct ubi_ec_hdr {
 	__u8    padding2[32];
 	__be32  hdr_crc;
 } __packed;
+
+#define VIDH_FLAG_CONSOLIDATED		BIT(0)
 
 /**
  * struct ubi_vid_hdr - on-flash UBI volume identifier header.
@@ -285,7 +286,7 @@ struct ubi_vid_hdr {
 	__u8    compat;
 	__be32  vol_id;
 	__be32  lnum;
-	__u8    padding1[4];
+	__be32	flags;
 	__be32  data_size;
 	__be32  used_ebs;
 	__be32  data_pad;
