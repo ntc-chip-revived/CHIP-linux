@@ -344,11 +344,17 @@ static int consolidation_worker(struct ubi_device *ubi,
 				int shutdown)
 {
 	int ret;
+	static int loop;
 
 	if (shutdown)
 		return 0;
 
 	ret = consolidate_lebs(ubi);
+
+	if (ret)
+		BUG_ON(++loop > 10);
+	else
+		loop = 0;
 
 	ubi->conso_scheduled = 0;
 	smp_wmb();
