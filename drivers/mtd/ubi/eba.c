@@ -59,7 +59,18 @@ struct ubi_eba_desc {
 };
 
 /**
- * ubi_eba_table - UBI eraseblock association table
+ * struct ubi_eba_cdesc - UBI erase block association desc used with MLC
+ *			  safe volumes
+ * @base: base fields
+ * @node: list element to queue the LEB in the different LEB state lists
+ */
+struct ubi_eba_cdesc {
+	struct ubi_eba_desc base;
+	struct list_head node;
+};
+
+/**
+ * struct ubi_eba_table - UBI eraseblock association table
  * @descs: array of descriptors (one entry for each available LEB)
  * @consolidated: bitmap encoding whether a LEB is consolidated or not
  * @hot: list of hot LEBs. Contains X elements, where X is the number of
@@ -76,8 +87,12 @@ struct ubi_eba_desc {
  *	    containing only valid LEBs.
  */
 struct ubi_eba_table {
-	struct ubi_eba_desc *descs;
+	union {
+		struct ubi_eba_desc *descs;
+		struct ubi_eba_cdesc *cdescs;
+	};
 	unsigned long *consolidated;
+	struct list_head lru;
 	struct list_head hot;
 	struct list_head cooling;
 	unsigned long *cold;
@@ -1410,33 +1425,63 @@ out_free:
 
 int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
 {
-	return vol->eba_tbl->descs[lnum].pnum;
+	int pnum;
+
+	if (vol->eba_tbl->consolidated)
+		pnum = vol->eba_tbl->cdescs[lnum].base.pnum;
+	else
+		pnum = vol->eba_tbl->descs[lnum].pnum;
+
+	return pnum;
 }
 
 void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
 {
-	vol->eba_tbl->descs[lnum].pnum = pnum;
+	if (vol->eba_tbl->consolidated)
+		vol->eba_tbl->cdescs[lnum].base.pnum = pnum;
+	else
+		vol->eba_tbl->descs[lnum].pnum = pnum;
 }
 
-struct ubi_eba_table *ubi_eba_create_table(int nlebs)
+struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
 {
 	struct ubi_eba_table *tbl;
+	int err = -ENOMEM;
 	int i;
 
 	tbl = kzalloc(sizeof(*tbl), GFP_KERNEL);
 	if (!tbl)
 		return ERR_PTR(-ENOMEM);
 
-	tbl->descs = kmalloc(nlebs * sizeof(*tbl->descs), GFP_KERNEL);
-	if (!tbl->descs) {
-		kfree(tbl);
-		return ERR_PTR(-ENOMEM);
+	if (!vol->mlc_safe) {
+		tbl->descs = kmalloc(nlebs * sizeof(*tbl->descs), GFP_KERNEL);
+		if (!tbl->descs)
+			goto err;
+	} else {
+
+		tbl->descs = kmalloc(nlebs * sizeof(*tbl->cdescs), GFP_KERNEL);
+		if (!tbl->descs)
+			goto err;
+
+		tbl->consolidated = kzalloc(DIV_ROUND_UP(nlebs, BITS_PER_LONG),
+					    GFP_KERNEL);
+		if (!tbl->consolidated)
+			goto err;
+
+		for (i = 0; i < nlebs; i++) {
+			tbl->cdescs[i].base.pnum = UBI_LEB_UNMAPPED;
+			INIT_LIST_HEAD(&tbl->cdescs[i].node);
+		}
 	}
 
-	for (i = 0; i < nlebs; i++)
-		tbl->descs[i].pnum = UBI_LEB_UNMAPPED;
-
 	return tbl;
+
+err:
+	kfree(tbl->consolidated);
+	kfree(tbl->descs);
+	kfree(tbl);
+
+	return ERR_PTR(err);
 }
 
 void ubi_eba_destroy_table(struct ubi_eba_table *tbl)
@@ -1444,19 +1489,75 @@ void ubi_eba_destroy_table(struct ubi_eba_table *tbl)
 	if (!tbl)
 		return;
 
+	kfree(tbl->consolidated);
 	kfree(tbl->descs);
 	kfree(tbl);
 }
 
 void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
-			int nentries)
+		        int nentries)
 {
 	int i;
 
 	ubi_assert(dst && vol && vol->eba_tbl);
 
-	for (i = 0; i < nentries; i++)
-		dst->descs[i].pnum = vol->eba_tbl->descs[i].pnum;
+	if (!vol->mlc_safe) {
+		for (i = 0; i < nentries; i++)
+			dst->descs[i].pnum = vol->eba_tbl->descs[i].pnum;
+	} else {
+		for (i = 0; i < nentries; i++) {
+			if (test_bit(i, vol->eba_tbl->consolidated)) {
+				/*
+				 * No need to copy the cpeb resource, only
+				 * ubi_leb_unmap() should do that.
+				 */
+				dst->cdescs[i].base.cpeb =
+					vol->eba_tbl->cdescs[i].base.cpeb;
+
+				set_bit(i, dst->consolidated);
+			} else {
+				dst->cdescs[i].base.pnum =
+					vol->eba_tbl->cdescs[i].base.pnum;
+			}
+		}
+	}
+}
+
+int ubi_eba_count_free_pebs(struct ubi_volume *vol)
+{
+	int i, used_pebs = 0;
+
+	if (!vol->mlc_safe) {
+		for (i = 0; i < vol->avail_lebs; i++) {
+			if (vol->eba_tbl->descs[i].pnum >= 0)
+				used_pebs++;
+		}
+	} else {
+		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
+
+		for (i = 0; i < vol->avail_lebs; i++) {
+			if (!test_bit(i, vol->eba_tbl->consolidated)) {
+				if (vol->eba_tbl->cdescs[i].base.pnum >= 0)
+					used_pebs++;
+			} else {
+				struct ubi_consolidated_peb *cpeb;
+				int j;
+
+				cpeb = vol->eba_tbl->cdescs[i].base.cpeb;
+
+				for (j = 0; j < lebs_per_cpeb; j++) {
+					if (cpeb->lnums[j] >= 0 &&
+					    cpeb->lnums[j] < i)
+						break;
+				}
+
+				if (j == lebs_per_cpeb)
+					used_pebs++;
+			}
+		}
+	}
+
+	return vol->reserved_pebs - used_pebs;
 }
 
 void ubi_eba_set_table(struct ubi_volume *vol, struct ubi_eba_table *tbl)
@@ -1499,7 +1600,7 @@ int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 
 		cond_resched();
 
-		tbl = ubi_eba_create_table(vol->reserved_pebs);
+		tbl = ubi_eba_create_table(vol, vol->reserved_pebs);
 		if (IS_ERR(tbl)) {
 			err = PTR_ERR(tbl);
 			goto out_free;

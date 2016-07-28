@@ -843,7 +843,7 @@ static inline bool ubi_leb_valid(struct ubi_volume *vol, int lnum)
 }
 
 /* eba.c */
-struct ubi_eba_table *ubi_eba_create_table(int nlebs);
+struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol,int nlebs);
 void ubi_eba_destroy_table(struct ubi_eba_table *tbl);
 void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
 			int nentries);

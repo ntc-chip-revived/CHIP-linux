@@ -138,7 +138,7 @@ static void vol_release(struct device *dev)
 {
 	struct ubi_volume *vol = container_of(dev, struct ubi_volume, dev);
 
-	kfree(vol->eba_tbl);
+	ubi_eba_set_table(vol, NULL);
 	kfree(vol);
 }
 
@@ -339,7 +339,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	if (err)
 		goto out_acc;
 
-	eba_tbl = ubi_eba_create_table(vol->reserved_pebs);
+	eba_tbl = ubi_eba_create_table(vol, vol->reserved_pebs);
 	if (IS_ERR(eba_tbl)) {
 		err = PTR_ERR(eba_tbl);
 		goto out_acc;
@@ -536,6 +536,7 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 	struct ubi_vtbl_record vtbl_rec;
 	struct ubi_eba_table *new_mapping;
 	int vol_id = vol->vol_id;
+	int avail_lebs = ubi_calc_avail_lebs(vol, reserved_pebs);
 
 	if (ubi->ro_mode)
 		return -EROFS;
@@ -554,7 +555,7 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 	if (reserved_pebs == vol->reserved_pebs)
 		return 0;
 
-	new_mapping = ubi_eba_create_table(reserved_pebs);
+	new_mapping = ubi_eba_create_table(vol, reserved_pebs);
 	if (IS_ERR(new_mapping))
 		return PTR_ERR(new_mapping);
 
@@ -582,7 +583,7 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 		}
 		ubi->avail_pebs -= pebs;
 		ubi->rsvd_pebs += pebs;
-		ubi_eba_copy_table(vol, new_mapping, vol->reserved_pebs);
+		ubi_eba_copy_table(vol, new_mapping, vol->avail_lebs);
 		ubi_eba_set_table(vol, new_mapping);
 		spin_unlock(&ubi->volumes_lock);
 	}
@@ -599,8 +600,8 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 		goto out_acc;
 
 	if (pebs < 0) {
-		for (i = 0; i < -pebs; i++) {
-			err = ubi_eba_unmap_leb(ubi, vol, reserved_pebs + i);
+		for (i = vol->avail_lebs; i < avail_lebs; i++) {
+			err = ubi_eba_unmap_leb(ubi, vol, i);
 			if (err)
 				goto out_acc;
 		}
@@ -608,17 +609,13 @@ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
 		ubi->rsvd_pebs += pebs;
 		ubi->avail_pebs -= pebs;
 		ubi_update_reserved(ubi);
-		ubi_eba_copy_table(vol, new_mapping, reserved_pebs);
+		ubi_eba_copy_table(vol, new_mapping, avail_lebs);
 		ubi_eba_set_table(vol, new_mapping);
 		spin_unlock(&ubi->volumes_lock);
 	}
 
-	/*
-	 * We currenlty assume a 1:1 relationship between LEBs and PEBs.
-	 * This will change with MLC/TLC NAND support.
-	 */
 	vol->reserved_pebs = reserved_pebs;
-	vol->avail_lebs = ubi_calc_avail_lebs(vol, reserved_pebs);
+	vol->avail_lebs = avail_lebs;
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
 		vol->used_ebs = vol->avail_lebs;
 		vol->last_eb_bytes = vol->usable_leb_size;
