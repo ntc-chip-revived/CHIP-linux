@@ -532,6 +532,7 @@ static int init_volumes(struct ubi_device *ubi,
 			const struct ubi_attach_info *ai,
 			const struct ubi_vtbl_record *vtbl)
 {
+	int lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
 	int i, reserved_pebs = 0;
 	struct ubi_ainf_volume *av;
 	struct ubi_volume *vol;
@@ -552,16 +553,24 @@ static int init_volumes(struct ubi_device *ubi,
 
 		vol->reserved_pebs = be32_to_cpu(vtbl[i].reserved_pebs);
 
-		if (vol->mlc_safe)
+		vol->vol_type = vtbl[i].vol_type == UBI_VID_DYNAMIC ?
+					UBI_DYNAMIC_VOLUME : UBI_STATIC_VOLUME;
+
+		if (vol->mlc_safe) {
+			ubi_assert(vol->vol_type == UBI_DYNAMIC_VOLUME);
 			vol->avail_lebs = be32_to_cpu(vtbl[i].avail_lebs);
-		else
+		} else {
+			if (lebs_per_cpeb > 1 &&
+			    vol->vol_type == UBI_DYNAMIC_VOLUME)
+				ubi_warn(ubi,
+					 "using dynamic volumes without MLC safe mode on MLC/TLC NAND is risky!");
+
 			vol->avail_lebs = vol->reserved_pebs;
+		}
 
 		vol->alignment = be32_to_cpu(vtbl[i].alignment);
 		vol->data_pad = be32_to_cpu(vtbl[i].data_pad);
 		vol->upd_marker = vtbl[i].upd_marker;
-		vol->vol_type = vtbl[i].vol_type == UBI_VID_DYNAMIC ?
-					UBI_DYNAMIC_VOLUME : UBI_STATIC_VOLUME;
 		vol->name_len = be16_to_cpu(vtbl[i].name_len);
 		vol->leb_size = ubi_calc_leb_size(vol);
 		vol->usable_leb_size = vol->leb_size - vol->data_pad;

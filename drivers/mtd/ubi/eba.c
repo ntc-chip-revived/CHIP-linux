@@ -52,10 +52,7 @@ struct ubi_consolidated_peb {
 };
 
 struct ubi_eba_desc {
-	union {
-		int pnum;
-		struct ubi_consolidated_peb *cpeb;
-	};
+	int pnum;
 };
 
 /**
@@ -65,8 +62,11 @@ struct ubi_eba_desc {
  * @node: list element to queue the LEB in the different LEB state lists
  */
 struct ubi_eba_cdesc {
-	struct ubi_eba_desc base;
 	struct list_head node;
+	union {
+		int pnum;
+		struct ubi_consolidated_peb *cpeb;
+	};
 };
 
 /**
@@ -372,12 +372,12 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, int lnum)
 		vol->eba_tbl->descs[lnum].pnum = UBI_LEB_UNMAPPED;
 		return true;
 	} else if (!test_bit(lnum, vol->eba_tbl->consolidated)) {
-		vol->eba_tbl->cdescs[lnum].base.pnum = UBI_LEB_UNMAPPED;
+		vol->eba_tbl->cdescs[lnum].pnum = UBI_LEB_UNMAPPED;
 		return true;
 	} else {
 		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
 		struct ubi_consolidated_peb *cpeb =
-				vol->eba_tbl->cdescs[lnum].base.cpeb;
+					vol->eba_tbl->cdescs[lnum].cpeb;
 		int i;
 
 		mutex_lock(&vol->eba_lock);
@@ -390,7 +390,7 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, int lnum)
 		mutex_unlock(&vol->eba_lock);
 
 		clear_bit(lnum, vol->eba_tbl->consolidated);
-		vol->eba_tbl->cdescs[lnum].base.pnum = UBI_LEB_UNMAPPED;
+		vol->eba_tbl->cdescs[lnum].pnum = UBI_LEB_UNMAPPED;
 
 		if (release_peb)
 			kfree(cpeb);
@@ -871,7 +871,7 @@ static int unconsolidate_leb(struct ubi_volume *vol, int lnum,
 		ubi_wl_put_peb(ubi, vol_id, lnum, ldesc->pnum, 0);
 
 	/* Update the EBA entry and LEB descriptor. */
-	vol->eba_tbl->cdescs[lnum].base.pnum = pnum;
+	vol->eba_tbl->cdescs[lnum].pnum = pnum;
 	ldesc->pnum = pnum;
 	ldesc->consolidated = false;
 	ldesc->lpos = -1;
@@ -1318,6 +1318,11 @@ static int is_error_sane(int err)
  *   o %MOVE_CANCEL_RACE, %MOVE_TARGET_WR_ERR, %MOVE_TARGET_BITFLIPS, etc;
  *   o a negative error code in case of failure.
  */
+
+/*
+ * TODO: rename into ubi_eba_copy_peb() and support the consolidated PEB
+ * case
+ */
 int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 		     struct ubi_vid_hdr *vid_hdr)
 {
@@ -1624,7 +1629,7 @@ void ubi_eba_get_ldesc(struct ubi_volume *vol, int lnum,
 		ldesc->consolidated = false;
 	} else if (test_bit(lnum, vol->eba_tbl->consolidated)) {
 		struct ubi_consolidated_peb *cpeb =
-				vol->eba_tbl->cdescs[lnum].base.cpeb;
+				vol->eba_tbl->cdescs[lnum].cpeb;
 		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
 		int i;
 
@@ -1649,9 +1654,9 @@ int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
 	int pnum;
 
 	if (!vol->mlc_safe)
-		pnum = vol->eba_tbl->cdescs[lnum].base.pnum;
+		pnum = vol->eba_tbl->cdescs[lnum].pnum;
 	else if (vol->eba_tbl->consolidated)
-		pnum = vol->eba_tbl->cdescs[lnum].base.cpeb->pnum;
+		pnum = vol->eba_tbl->cdescs[lnum].cpeb->pnum;
 	else
 		pnum = vol->eba_tbl->descs[lnum].pnum;
 
@@ -1663,7 +1668,7 @@ void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
 	if (!vol->mlc_safe)
 		vol->eba_tbl->descs[lnum].pnum = pnum;
 	else
-		vol->eba_tbl->cdescs[lnum].base.pnum = pnum;
+		vol->eba_tbl->cdescs[lnum].pnum = pnum;
 }
 
 void ubi_eba_set_cpeb(struct ubi_volume *vol, int lnum,
@@ -1702,7 +1707,7 @@ struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
 			goto err;
 
 		for (i = 0; i < nlebs; i++) {
-			tbl->cdescs[i].base.pnum = UBI_LEB_UNMAPPED;
+			tbl->cdescs[i].pnum = UBI_LEB_UNMAPPED;
 			INIT_LIST_HEAD(&tbl->cdescs[i].node);
 		}
 	}
@@ -1744,13 +1749,13 @@ void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
 				 * No need to copy the cpeb resource, only
 				 * ubi_leb_unmap() should do that.
 				 */
-				dst->cdescs[i].base.cpeb =
-					vol->eba_tbl->cdescs[i].base.cpeb;
+				dst->cdescs[i].cpeb =
+					vol->eba_tbl->cdescs[i].cpeb;
 
 				set_bit(i, dst->consolidated);
 			} else {
-				dst->cdescs[i].base.pnum =
-					vol->eba_tbl->cdescs[i].base.pnum;
+				dst->cdescs[i].pnum =
+					vol->eba_tbl->cdescs[i].pnum;
 			}
 		}
 	}
@@ -1770,13 +1775,13 @@ int ubi_eba_count_free_pebs(struct ubi_volume *vol)
 
 		for (i = 0; i < vol->avail_lebs; i++) {
 			if (!test_bit(i, vol->eba_tbl->consolidated)) {
-				if (vol->eba_tbl->cdescs[i].base.pnum >= 0)
+				if (vol->eba_tbl->cdescs[i].pnum >= 0)
 					used_pebs++;
 			} else {
 				struct ubi_consolidated_peb *cpeb;
 				int j;
 
-				cpeb = vol->eba_tbl->cdescs[i].base.cpeb;
+				cpeb = vol->eba_tbl->cdescs[i].cpeb;
 
 				for (j = 0; j < lebs_per_cpeb; j++) {
 					if (cpeb->lnums[j] >= 0 &&
