@@ -268,6 +268,14 @@ struct ubi_fm_pool {
 
 struct ubi_eba_table;
 
+#define UBI_LEB_SLC_MODE	-1
+
+struct ubi_leb_desc {
+	int pnum;
+	int lpos;
+	bool consolidated;
+};
+
 /**
  * struct ubi_volume - UBI volume description data structure.
  * @dev: device object to make use of the the Linux device model
@@ -350,6 +358,7 @@ struct ubi_volume {
 	void *upd_buf;
 
 	struct ubi_eba_table *eba_tbl;
+	struct mutex eba_lock;
 	unsigned int checked:1;
 	unsigned int corrupted:1;
 	unsigned int upd_marker:1;
@@ -849,6 +858,8 @@ void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
 			int nentries);
 void ubi_eba_set_table(struct ubi_volume *vol, struct ubi_eba_table *tbl);
 int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum);
+void ubi_eba_get_ldesc(struct ubi_volume *vol, int lnum,
+		       struct ubi_leb_desc *ldesc);
 void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum);
 int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 		      int lnum);
@@ -889,8 +900,12 @@ int ubi_ensure_anchor_pebs(struct ubi_device *ubi);
 /* io.c */
 int ubi_io_read(const struct ubi_device *ubi, void *buf, int pnum, int offset,
 		int len);
+int ubi_io_slc_read(const struct ubi_device *ubi, void *buf, int pnum,
+		    int offset, int len);
 int ubi_io_write(struct ubi_device *ubi, const void *buf, int pnum, int offset,
 		 int len);
+int ubi_io_slc_write(struct ubi_device *ubi, const void *buf, int pnum,
+		     int offset, int len);
 int ubi_io_sync_erase(struct ubi_device *ubi, int pnum, int torture);
 int ubi_io_is_bad(const struct ubi_device *ubi, int pnum);
 int ubi_io_mark_bad(const struct ubi_device *ubi, int pnum);
@@ -900,6 +915,11 @@ int ubi_io_write_ec_hdr(struct ubi_device *ubi, int pnum,
 			struct ubi_ec_hdr *ec_hdr);
 int ubi_io_read_vid_hdr(struct ubi_device *ubi, int pnum,
 			struct ubi_vid_hdr *vid_hdr, int verbose);
+int ubi_io_read_vid_hdrs(struct ubi_device *ubi, int pnum,
+			 struct ubi_vid_hdr *vid_hdrs, int *num,
+			 int verbose);
+int ubi_io_write_vid_hdrs(struct ubi_device *ubi, int pnum,
+			  struct ubi_vid_hdr *vid_hdrs, int num);
 int ubi_io_write_vid_hdr(struct ubi_device *ubi, int pnum,
 			 struct ubi_vid_hdr *vid_hdr);
 
