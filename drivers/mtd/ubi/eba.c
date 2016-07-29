@@ -61,6 +61,19 @@ struct ubi_eba_desc {
 	int pnum;
 };
 
+/*
+struct ubi_eba_open_desc {
+	struct list_head node;
+	int pnum;
+};
+
+struct ubi_eba_closed_desc {
+	struct list_head node;
+	int pnum;
+	int lnums[];
+};
+*/
+
 /**
  * struct ubi_eba_cdesc - UBI erase block association desc used with MLC
  *			  safe volumes
@@ -393,23 +406,69 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
 		struct ubi_consolidated_peb *cpeb =
 					vol->eba_tbl->cdescs[lnum].cpeb;
-		int i;
+		struct list_head *dirty = NULL;
+		int i, valid = 0;
 
 		mutex_lock(&vol->eba_lock);
+
+		/*
+		 * Remove the first valid LEB from it's classification list
+		 * (the other entries of a consolidated PEBs are not
+		 * classified).
+		 */
+		for (i = 0; i < lebs_per_cpeb; i++) {
+			struct ubi_eba_cdesc *cdesc;
+
+			if (cpeb->lnums[i] >= 0) {
+				cdesc = &vol->eba_tbl->cdescs[cpeb->lnums[i]];
+				list_del(&cdesc->node);
+				break;
+			}
+		}
+
+		/* Invalidate the LEB pointed by ldesc. */
 		for (i = 0; i < lebs_per_cpeb; i++) {
 			if (cpeb->lnums[i] == lnum)
 				cpeb->lnums[i] = UBI_LEB_UNMAPPED;
 			else if (cpeb->lnums[i] >= 0)
-				release_peb = false;
+				valid++;
 		}
-		list_del(&vol->eba_tbl->cdescs[lnum].node);
+
+		/*
+		 * We have several dirty lists. The dirty list is selected
+		 * based on the number of valid LEBs present in the
+		 * consolidated PEB. This allows better selection of
+		 * consolidable LEBs (for example, on TLC NANDs you might
+		 * prefer to first pick LEBs that are alone in their PEB
+		 * to generate more PEBs, or combine LEBs from 2 different
+		 * dirty lists to always produce at least 2 free PEBs at
+		 * each consolidation step.
+		 */
+		if (valid)
+			dirty = &vol->eba_tbl->closed.dirty[valid - 1];
+
+		/*
+		 * Re-insert the first valid LEB in the appropriate dirty
+		 * list.
+		 */
+		for (i = 0; dirty && i < lebs_per_cpeb; i++) {
+			struct ubi_eba_cdesc *cdesc;
+
+			if (cpeb->lnums[i] >= 0) {
+				cdesc = &vol->eba_tbl->cdescs[cpeb->lnums[i]];
+				list_add(&cdesc->node, dirty);
+				break;
+			}
+		}
 		mutex_unlock(&vol->eba_lock);
 
 		clear_bit(lnum, vol->eba_tbl->consolidated);
 		vol->eba_tbl->cdescs[lnum].pnum = UBI_LEB_UNMAPPED;
 
-		if (release_peb)
+		if (!valid)
 			kfree(cpeb);
+		else
+			release_peb = false;
 	}
 
 	return release_peb;
