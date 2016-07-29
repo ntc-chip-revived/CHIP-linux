@@ -660,6 +660,15 @@ static int init_volumes(struct ubi_device *ubi,
 	vol->ubi = ubi;
 
 	reserved_lebs = DIV_ROUND_UP(reserved_lebs, ubi->lebs_per_cpeb);
+
+	/* reserve an additional ubi->lebs_per_cpeb-1 PEBs for the following case:
+	 * If a device is almost filled up, all LEBs were consolidated and only
+	 * ubi->lebs_per_cpeb LEBs are free, we require one PEB of each one of
+	 * these LEBS to initially store their data when written. After that,
+	 * consolidation can kick in an consolidate all of them into a single PEB.
+	 */
+	reserved_lebs += ubi->lebs_per_cpeb - 1;
+
 	if (reserved_lebs > ubi->avail_pebs) {
 		ubi_err(ubi, "not enough PEBs, required %d, available %d",
 			reserved_lebs, ubi->avail_pebs);
