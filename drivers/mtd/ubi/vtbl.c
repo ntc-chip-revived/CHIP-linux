@@ -300,6 +300,7 @@ static int create_vtbl(struct ubi_device *ubi, struct ubi_attach_info *ai,
 		       int copy, void *vtbl)
 {
 	int err, tries = 0;
+	bool full = false;
 	struct ubi_vid_hdr *vid_hdr;
 	struct ubi_ainf_peb *new_aeb;
 
@@ -334,20 +335,14 @@ retry:
 	if (err)
 		goto write_error;
 
-	if (ubi->vtbl_size < ubi->leb_size) { //XXX
-		err = ubi_io_write_data(ubi, vtbl, new_aeb->pnum,
-					ubi->leb_size - ubi->min_io_size,
-					ubi->min_io_size);
-	}
+	full = ubi->vtbl_size >= ubi->leb_size - ubi->min_io_size;
 
-	if (err)
-		goto write_error;
 	/*
 	 * And add it to the attaching information. Don't delete the old version
 	 * of this LEB as it will be deleted and freed in 'ubi_add_to_av()'.
 	 */
 	list_add_tail(&new_aeb->list, &ai->used);
-	err = ubi_add_to_av(ubi, ai, new_aeb, vid_hdr, 0, 0, true);
+	err = ubi_add_to_av(ubi, ai, new_aeb, vid_hdr, 0, 0, full);
 	ubi_free_vid_hdr(ubi, vid_hdr);
 	return err;
 
@@ -655,7 +650,7 @@ static int init_volumes(struct ubi_device *ubi,
 
 	ubi_assert(!ubi->volumes[i]);
 	ubi->volumes[vol_id2idx(ubi, vol->vol_id)] = vol;
-	reserved_lebs += vol->reserved_lebs * ubi->lebs_per_cpeb;
+	reserved_lebs += vol->reserved_lebs;
 	ubi->vol_count += 1;
 	vol->ubi = ubi;
 
