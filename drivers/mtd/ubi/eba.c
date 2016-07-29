@@ -92,7 +92,7 @@ struct ubi_eba_table {
 		struct ubi_eba_cdesc *cdescs;
 	};
 	unsigned long *consolidated;
-	struct list_head lru;
+	struct list_head used;
 	struct list_head hot;
 	struct list_head cooling;
 	unsigned long *cold;
@@ -370,10 +370,13 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, int lnum)
 
 	if (!vol->mlc_safe) {
 		vol->eba_tbl->descs[lnum].pnum = UBI_LEB_UNMAPPED;
-		return true;
 	} else if (!test_bit(lnum, vol->eba_tbl->consolidated)) {
-		vol->eba_tbl->cdescs[lnum].pnum = UBI_LEB_UNMAPPED;
-		return true;
+		if (vol->eba_tbl->cdescs[lnum].pnum != UBI_LEB_UNMAPPED) {
+			mutex_lock(&vol->eba_lock);
+			list_del(&vol->eba_tbl->cdescs[lnum].node);
+			mutex_unlock(&vol->eba_lock);
+			vol->eba_tbl->cdescs[lnum].pnum = UBI_LEB_UNMAPPED;
+		}
 	} else {
 		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
 		struct ubi_consolidated_peb *cpeb =
@@ -387,6 +390,7 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, int lnum)
 			else if (cpeb->lnums[i] >= 0)
 				release_peb = false;
 		}
+		list_del(&vol->eba_tbl->cdescs[lnum].node);
 		mutex_unlock(&vol->eba_lock);
 
 		clear_bit(lnum, vol->eba_tbl->consolidated);
@@ -989,6 +993,14 @@ retry:
 
 	/* TODO: hide this set_pnum operation in an high-level helper? */
 	ubi_eba_set_pnum(vol, lnum, ldesc.pnum);
+
+	/* Put the LEB at the beginning of the used list. */
+	mutex_lock(&vol->eba_lock);
+	if (!list_empty(&vol->eba_tbl->cdescs[lnum].node))
+		list_del(&vol->eba_tbl->cdescs[lnum].node);
+	list_add(&vol->eba_tbl->cdescs[lnum].node, &vol->eba_tbl->used);
+	mutex_unlock(&vol->eba_lock);
+
 	up_read(&ubi->fm_eba_sem);
 
 	leb_write_unlock(ubi, vol_id, lnum);
@@ -1240,6 +1252,14 @@ retry:
 
 	old_pnum = ubi_eba_get_pnum(vol, lnum);
 	ubi_eba_set_pnum(vol, lnum, pnum);
+
+	/* Put the LEB at the beginning of the used list. */
+	mutex_lock(&vol->eba_lock);
+	if (!list_empty(&vol->eba_tbl->cdescs[lnum].node))
+		list_del(&vol->eba_tbl->cdescs[lnum].node);
+	list_add(&vol->eba_tbl->cdescs[lnum].node, &vol->eba_tbl->used);
+	mutex_unlock(&vol->eba_lock);
+
 	up_read(&ubi->fm_eba_sem);
 
 	if (old_pnum >= 0) {
