@@ -46,6 +46,12 @@
 #include <linux/err.h>
 #include "ubi.h"
 
+struct ubi_consolidation {
+	struct ubi_consolidated_peb *cpeb;
+	struct ubi_leb_desc src;
+	struct ubi_leb_desc dst;
+};
+
 struct ubi_consolidated_peb {
 	int pnum;
 	int lnums[];
@@ -92,11 +98,16 @@ struct ubi_eba_table {
 		struct ubi_eba_cdesc *cdescs;
 	};
 	unsigned long *consolidated;
-	struct list_head used;
-	struct list_head hot;
-	struct list_head cooling;
-	unsigned long *cold;
-	unsigned long *frozen;
+	struct list_head open;
+	struct {
+		struct list_head clean;
+		struct list_head *dirty;
+	} closed;
+
+//	struct list_head hot;
+//	struct list_head cooling;
+//	unsigned long *cold;
+//	unsigned long *frozen;
 };
 
 /* Number of physical eraseblocks reserved for atomic LEB change operation */
@@ -364,14 +375,15 @@ static void leb_write_unlock(struct ubi_device *ubi, int vol_id, int lnum)
 	spin_unlock(&ubi->ltree_lock);
 }
 
-bool ubi_eba_invalidate_leb(struct ubi_volume *vol, int lnum)
+bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 {
 	bool release_peb = true;
+	int lnum = ldesc->lnum;
 
 	if (!vol->mlc_safe) {
 		vol->eba_tbl->descs[lnum].pnum = UBI_LEB_UNMAPPED;
-	} else if (!test_bit(lnum, vol->eba_tbl->consolidated)) {
-		if (vol->eba_tbl->cdescs[lnum].pnum != UBI_LEB_UNMAPPED) {
+	} else if (ldesc->consolidated) {
+		if (ldesc->pnum != UBI_LEB_UNMAPPED) {
 			mutex_lock(&vol->eba_lock);
 			list_del(&vol->eba_tbl->cdescs[lnum].node);
 			mutex_unlock(&vol->eba_lock);
@@ -435,7 +447,7 @@ int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 
 	dbg_eba("invalidate LEB %d:%d", vol_id, lnum);
 	down_read(&ubi->fm_eba_sem);
-	release_peb = ubi_eba_invalidate_leb(vol, lnum);
+	release_peb = ubi_eba_invalidate_leb(vol, &ldesc);
 	up_read(&ubi->fm_eba_sem);
 
 	if (release_peb) {
@@ -478,6 +490,33 @@ static int write_leb(struct ubi_volume *vol, const void *buf,
 
 	return ubi_io_write(ubi, buf, ldesc->pnum, offset, len);
 }
+
+static void leb_updated(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
+{
+	int lnum = ldesc->lnum;
+
+	ubi_assert(!ldesc->consolidated && ldesc->lpos < 1);
+
+	/* Put the LEB at the beginning of the used list. */
+	mutex_lock(&vol->eba_lock);
+	if (!list_empty(&vol->eba_tbl->cdescs[lnum].node))
+		list_del(&vol->eba_tbl->cdescs[lnum].node);
+	list_add(&vol->eba_tbl->cdescs[lnum].node, &vol->eba_tbl->open);
+	mutex_unlock(&vol->eba_lock);
+}
+
+//static int update_eba_desc(struct ubi_volume *vol,
+//			   const struct ubi_leb_desc *ldesc)
+//{
+//	ubi_eba_set_pnum(vol, lnum, ldesc.pnum);
+//
+//	/* Put the LEB at the beginning of the used list. */
+//	mutex_lock(&vol->eba_lock);
+//	if (!list_empty(&vol->eba_tbl->cdescs[lnum].node))
+//		list_del(&vol->eba_tbl->cdescs[lnum].node);
+//	list_add(&vol->eba_tbl->cdescs[lnum].node, &vol->eba_tbl->used);
+//	mutex_unlock(&vol->eba_lock);
+//}
 
 /**
  * ubi_eba_read_leb - read data.
@@ -823,13 +862,13 @@ int ubi_eba_get_peb(struct ubi_volume *vol)
 /**
  * Must be called the LEB lock held in write mode.
  */
-static int unconsolidate_leb(struct ubi_volume *vol, int lnum,
+static int unconsolidate_leb(struct ubi_volume *vol,
 			     struct ubi_leb_desc *ldesc, int len)
 {
 	struct ubi_device *ubi = vol->ubi;
 	struct ubi_vid_hdr *vid_hdr = ubi->peb_buf + ubi->vid_hdr_offset;
 	void *buf = ubi->peb_buf + ubi->leb_start;
-	int pnum, err, vol_id = vol->vol_id;
+	int pnum, err, vol_id = vol->vol_id, lnum = ldesc->lnum;
 	u32 crc;
 
 	if (!ldesc->consolidated || !len)
@@ -871,7 +910,7 @@ static int unconsolidate_leb(struct ubi_volume *vol, int lnum,
 	mutex_unlock(&ubi->buf_mutex);
 
 	/* Release the PEB if we were the last user. */
-	if (ubi_eba_invalidate_leb(vol, lnum))
+	if (ubi_eba_invalidate_leb(vol, ldesc))
 		ubi_wl_put_peb(ubi, vol_id, lnum, ldesc->pnum, 0);
 
 	/* Update the EBA entry and LEB descriptor. */
@@ -920,7 +959,7 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 	ubi_eba_get_ldesc(vol, lnum, &ldesc);
 
 	/* Make sure we un-consolidate the LEB if needed. */
-	err = unconsolidate_leb(vol, lnum, &ldesc, len);
+	err = unconsolidate_leb(vol, &ldesc, len);
 	if (err) {
 		leb_write_unlock(ubi, vol_id, lnum);
 		return err;
@@ -994,12 +1033,8 @@ retry:
 	/* TODO: hide this set_pnum operation in an high-level helper? */
 	ubi_eba_set_pnum(vol, lnum, ldesc.pnum);
 
-	/* Put the LEB at the beginning of the used list. */
-	mutex_lock(&vol->eba_lock);
-	if (!list_empty(&vol->eba_tbl->cdescs[lnum].node))
-		list_del(&vol->eba_tbl->cdescs[lnum].node);
-	list_add(&vol->eba_tbl->cdescs[lnum].node, &vol->eba_tbl->used);
-	mutex_unlock(&vol->eba_lock);
+	/* LEB has been updated, put it at the beginning of the used list. */
+	leb_updated(vol, &ldesc);
 
 	up_read(&ubi->fm_eba_sem);
 
@@ -1253,13 +1288,8 @@ retry:
 	old_pnum = ubi_eba_get_pnum(vol, lnum);
 	ubi_eba_set_pnum(vol, lnum, pnum);
 
-	/* Put the LEB at the beginning of the used list. */
-	mutex_lock(&vol->eba_lock);
-	if (!list_empty(&vol->eba_tbl->cdescs[lnum].node))
-		list_del(&vol->eba_tbl->cdescs[lnum].node);
-	list_add(&vol->eba_tbl->cdescs[lnum].node, &vol->eba_tbl->used);
-	mutex_unlock(&vol->eba_lock);
-
+	/* LEB has been updated, put it at the beginning of the used list. */
+	leb_updated(vol, &ldesc);
 	up_read(&ubi->fm_eba_sem);
 
 	if (old_pnum >= 0) {
@@ -1667,6 +1697,8 @@ void ubi_eba_get_ldesc(struct ubi_volume *vol, int lnum,
 		ldesc->lpos = -1;
 		ldesc->consolidated = false;
 	}
+
+	ldesc->lnum = lnum;
 }
 
 int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
@@ -1716,6 +1748,7 @@ struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
 		if (!tbl->descs)
 			goto err;
 	} else {
+		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
 
 		tbl->descs = kmalloc(nlebs * sizeof(*tbl->cdescs), GFP_KERNEL);
 		if (!tbl->descs)
@@ -1726,6 +1759,18 @@ struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
 		if (!tbl->consolidated)
 			goto err;
 
+		INIT_LIST_HEAD(&tbl->open);
+		INIT_LIST_HEAD(&tbl->closed.clean);
+
+		tbl->closed.dirty = kmalloc((lebs_per_cpeb - 1) *
+					    sizeof(*tbl->closed.dirty),
+					    GFP_KERNEL);
+		if (tbl->closed.dirty)
+			goto err;
+
+		for (i = 0; i < lebs_per_cpeb - 1; i++)
+			INIT_LIST_HEAD(&tbl->closed.dirty[i]);
+
 		for (i = 0; i < nlebs; i++) {
 			tbl->cdescs[i].pnum = UBI_LEB_UNMAPPED;
 			INIT_LIST_HEAD(&tbl->cdescs[i].node);
@@ -1735,6 +1780,7 @@ struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
 	return tbl;
 
 err:
+	kfree(tbl->closed.dirty);
 	kfree(tbl->consolidated);
 	kfree(tbl->descs);
 	kfree(tbl);

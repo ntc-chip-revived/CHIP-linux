@@ -271,6 +271,7 @@ struct ubi_eba_table;
 #define UBI_LEB_SLC_MODE	-1
 
 struct ubi_leb_desc {
+	int lnum;
 	int pnum;
 	int lpos;
 	bool consolidated;
