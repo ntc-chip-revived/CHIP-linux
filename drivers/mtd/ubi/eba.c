@@ -46,10 +46,13 @@
 #include <linux/err.h>
 #include "ubi.h"
 
-struct ubi_consolidation {
+struct ubi_consolidation_ctx {
+	int vol_id;
+	bool cancel;
+	int loffset;
+	struct ubi_leb_desc ldesc;
 	struct ubi_consolidated_peb *cpeb;
-	struct ubi_leb_desc src;
-	struct ubi_leb_desc dst;
+	void *buf;
 };
 
 struct ubi_consolidated_peb {
@@ -117,6 +120,8 @@ struct ubi_eba_table {
 		struct list_head *dirty;
 	} closed;
 
+	struct ubi_consolidation_ctx consolidation;
+//	struct list_head consolidating;
 //	struct list_head hot;
 //	struct list_head cooling;
 //	unsigned long *cold;
@@ -400,6 +405,32 @@ static void leb_write_unlock(struct ubi_device *ubi, int vol_id, int lnum)
 	spin_unlock(&ubi->ltree_lock);
 }
 
+/* Must be called with the eba_lock held. */
+static void cancel_leb_consolidation(struct ubi_volume *vol,
+				     const struct ubi_leb_desc *ldesc)
+{
+	struct ubi_consolidated_peb *cpeb;
+	int i, lebs_per_cpeb;
+
+	if (vol->eba_tbl->consolidation.ldesc.lpos < 0)
+		return;
+
+	lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
+	cpeb = vol->eba_tbl->consolidation.cpeb;
+
+	/* Make sure the LEB is not being consolidated. */
+	for (i = 0; i < lebs_per_cpeb; i++) {
+		if (cpeb->lnums[i] == UBI_LEB_UNMAPPED)
+			break;
+		else if (cpeb->lnums[i] != ldesc->lnum)
+			continue;
+
+		/* Cancel the consolidation. */
+		vol->eba_tbl->consolidation.cancel = true;
+		break;
+	}
+}
+
 bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 {
 	bool release_peb = true;
@@ -410,7 +441,8 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 	} else if (ldesc->consolidated) {
 		if (ldesc->pnum != UBI_LEB_UNMAPPED) {
 			mutex_lock(&vol->eba_lock);
-			list_del(&vol->eba_tbl->cdescs[lnum].node);
+			list_del_init(&vol->eba_tbl->cdescs[lnum].node);
+			cancel_leb_consolidation(vol, ldesc);
 			mutex_unlock(&vol->eba_lock);
 			vol->eba_tbl->cdescs[lnum].pnum = UBI_LEB_UNMAPPED;
 		}
@@ -472,6 +504,8 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 				break;
 			}
 		}
+
+		cancel_leb_consolidation(vol, ldesc);
 		mutex_unlock(&vol->eba_lock);
 
 		clear_bit(lnum, vol->eba_tbl->consolidated);
@@ -564,14 +598,22 @@ static int write_leb(struct ubi_volume *vol, const void *buf,
 
 static void leb_updated(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 {
+	struct ubi_eba_cdesc *cdesc;
 	int lnum = ldesc->lnum;
 
 	ubi_assert(!ldesc->consolidated && ldesc->lpos < 1);
 
+	if (!vol->eba_tbl->consolidated)
+		return;
+
 	/* Put the LEB at the beginning of the used list. */
 	mutex_lock(&vol->eba_lock);
-	if (!list_empty(&vol->eba_tbl->cdescs[lnum].node))
+	cdesc = &vol->eba_tbl->cdescs[lnum];
+	if (!list_empty(&cdesc->node))
 		list_del(&vol->eba_tbl->cdescs[lnum].node);
+	else
+		cancel_leb_consolidation(vol, ldesc);
+
 	list_add(&vol->eba_tbl->cdescs[lnum].node, &vol->eba_tbl->open);
 	mutex_unlock(&vol->eba_lock);
 }
@@ -1425,6 +1467,137 @@ static int is_error_sane(int err)
 	return 1;
 }
 
+static int leb_for_consolidation(struct ubi_volume *vol)
+{
+	struct ubi_consolidation_ctx *conso;
+
+	struct list_head *pool = NULL;
+
+	conso = &vol->eba_tbl->consolidation;
+
+	mutex_lock(&vol->eba_lock);
+
+	/*
+	 * FIXME: For simplicity, we only try to consolidate dirty PEBs if
+	 * they contain only one valid LEB. This should work fine for SLC
+	 * NANDs, but can be a problem for TLC ones.
+	 *
+	 * If there's no dirty PEBs, pick the oldest opened one.
+	 */
+	if (!list_empty(&vol->eba_tbl->closed.dirty[0]))
+		pool = &vol->eba_tbl->closed.dirty[0];
+	else if (!list_empty(&vol->eba_tbl->open))
+		pool = &vol->eba_tbl->open;
+
+	if (pool) {
+		struct ubi_eba_cdesc *cdesc;
+
+		cdesc = list_last_entry(pool, struct ubi_eba_cdesc, node);
+		list_del(&cdesc->node);
+		conso->loffset = 0;
+		conso->ldesc.lnum = cdesc_to_lnum(vol, cdesc);
+		conso->ldesc.lpos++;
+		conso->cpeb->lnums[conso->ldesc.lpos] = conso->ldesc.lnum;
+	}
+	mutex_lock(&vol->eba_lock);
+
+	return pool ? 0 : -ENOENT;
+}
+
+static int start_consolidation(struct ubi_volume *vol)
+{
+	/*
+	 * TODO:
+	 * - Pick a free PEB
+	 * - allocate the consolidated PEB struct.
+	 */
+
+	return leb_for_consolidation(vol);
+}
+
+static int finish_consolidation(struct ubi_volume *vol)
+{
+	/* TODO: take the eba_lock and push the VID headers. */
+
+	return 0;
+}
+
+static int consolidation_step(struct ubi_volume *vol)
+{
+	struct ubi_device *ubi = vol->ubi;
+	int lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
+	struct ubi_consolidation_ctx *ctx;
+	struct ubi_leb_desc src;
+	int err = 0;
+
+	ctx = &vol->eba_tbl->consolidation;
+
+	/* TODO: detect cancellation. */
+	ubi_assert(ctx->cpeb);
+
+	if (ctx->ldesc.lpos < 0)
+		err = start_consolidation(vol);
+	else if (ctx->ldesc.lpos == lebs_per_cpeb - 1 &&
+		 ctx->loffset == ubi->leb_size)
+		err = finish_consolidation(vol);
+	else if (ctx->loffset == ubi->leb_size)
+		err = leb_for_consolidation(vol);
+
+	if (err)
+		goto err_cancel;
+
+	ubi_eba_get_ldesc(vol, ctx->ldesc.lnum, &src);
+
+	leb_read_lock(ubi, ctx->vol_id, ctx->ldesc.lnum);
+
+	/*
+	 * Only copy one page here.
+	 * TODO: support an 'aggressive' mode where we run consolidation
+	 * until we're able to free the consolidated PEBs.
+	 */
+	err = read_leb(vol, ctx->buf, &src, ctx->loffset, ubi->min_io_size);
+	if (err && !mtd_is_bitflip(err))
+		goto err_unlock_leb;
+
+	/*
+	 * We can safely release the lock here: we'll check if that the LEB is
+	 * still valid before writing the VID headers. Which means  we can
+	 * cancel the consolidation if one of the LEBs we're consolidating is
+	 * invalidated.
+	 */
+	leb_read_unlock(ubi, ctx->vol_id, ctx->ldesc.lnum);
+
+	/* TODO: detect cancellation. */
+	err = write_leb(vol, ctx->buf, &ctx->ldesc, ctx->loffset,
+			ubi->min_io_size);
+	if (err)
+		return err;
+
+	ctx->loffset += ubi->min_io_size;
+	if (ctx->loffset == ubi->leb_size) {
+		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
+
+		/* TODO: select the next */
+
+		/*  */
+		if (ctx->ldesc.lpos < lebs_per_cpeb - 1) {
+			err = leb_for_consolidation(vol);
+			if (err)
+				goto err_cancel;
+		}
+	}
+
+	return 0;
+
+err_unlock_leb:
+	leb_read_unlock(ubi, ctx->vol_id, ctx->ldesc.lnum);
+
+err_cancel:
+	/* TODO: handle cancellation. */
+
+	return err;
+}
+
 /**
  * ubi_eba_copy_leb - copy logical eraseblock.
  * @ubi: UBI device description object
@@ -1444,7 +1617,7 @@ static int is_error_sane(int err)
  * TODO: rename into ubi_eba_copy_peb() and support the consolidated PEB
  * case
  */
-int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
+int ubi_eba_copy_peb(struct ubi_device *ubi, int from, int to,
 		     struct ubi_vid_hdr *vid_hdr)
 {
 	int err, vol_id, lnum, data_size, aldata_size, idx;
