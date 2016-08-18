@@ -126,6 +126,18 @@ struct ubi_eba_table {
 /* Number of physical eraseblocks reserved for atomic LEB change operation */
 #define EBA_RESERVED_PEBS 1
 
+static int cdesc_to_lnum(struct ubi_volume *vol, struct ubi_eba_cdesc *cdesc)
+{
+	struct ubi_eba_table *tbl = vol->eba_tbl;
+	unsigned long idx = (unsigned long)cdesc - (unsigned long)tbl->cdescs;
+
+	idx /= sizeof(*cdesc);
+
+	ubi_assert(idx < vol->avail_lebs);
+
+	return idx;
+}
+
 /**
  * next_sqnum - get next sequence number.
  * @ubi: UBI device description object
@@ -1789,7 +1801,6 @@ void ubi_eba_set_cpeb(struct ubi_volume *vol, int lnum,
 	ubi_assert(vol->eba_tbl->consolidated);
 
 	set_bit(lnum, vol->eba_tbl->consolidated);
-
 }
 
 struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
@@ -1860,27 +1871,52 @@ void ubi_eba_destroy_table(struct ubi_eba_table *tbl)
 void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
 		        int nentries)
 {
+	struct ubi_eba_table *src;
 	int i;
 
 	ubi_assert(dst && vol && vol->eba_tbl);
 
+	src = vol->eba_tbl;
+
 	if (!vol->mlc_safe) {
 		for (i = 0; i < nentries; i++)
-			dst->descs[i].pnum = vol->eba_tbl->descs[i].pnum;
+			dst->descs[i].pnum = src->descs[i].pnum;
 	} else {
+		int lebs_per_cpeb = mtd_pairing_groups_per_eb(vol->ubi->mtd);
+		struct ubi_eba_cdesc *cdesc;
+		int lnum;
+
 		for (i = 0; i < nentries; i++) {
-			if (test_bit(i, vol->eba_tbl->consolidated)) {
+			if (test_bit(i, src->consolidated)) {
 				/*
 				 * No need to copy the cpeb resource, only
 				 * ubi_leb_unmap() should do that.
 				 */
-				dst->cdescs[i].cpeb =
-					vol->eba_tbl->cdescs[i].cpeb;
+				dst->cdescs[i].cpeb = src->cdescs[i].cpeb;
 
 				set_bit(i, dst->consolidated);
 			} else {
-				dst->cdescs[i].pnum =
-					vol->eba_tbl->cdescs[i].pnum;
+				dst->cdescs[i].pnum = src->cdescs[i].pnum;
+			}
+		}
+
+		list_for_each_entry(cdesc, &src->open, node) {
+			lnum = cdesc_to_lnum(vol, cdesc);
+			list_add_tail(&dst->cdescs[lnum].node, &dst->open);
+		}
+
+		list_for_each_entry(cdesc, &src->closed.clean, node) {
+			lnum = cdesc_to_lnum(vol, cdesc);
+			list_add_tail(&dst->cdescs[lnum].node,
+				      &dst->closed.clean);
+		}
+
+		for (i = 0; i < lebs_per_cpeb; i++) {
+			struct list_head *dirty = &src->closed.dirty[i];
+
+			list_for_each_entry(cdesc, dirty, node) {
+				lnum = cdesc_to_lnum(vol, cdesc);
+				list_add_tail(&dst->cdescs[lnum].node, dirty);
 			}
 		}
 	}
