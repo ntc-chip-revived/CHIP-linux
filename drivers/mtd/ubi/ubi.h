@@ -277,6 +277,14 @@ struct ubi_leb_desc {
 	bool consolidated;
 };
 
+struct ubi_consolidation_ctx {
+	bool cancel;
+	int loffset;
+	struct ubi_leb_desc ldesc;
+	struct ubi_consolidated_peb *cpeb;
+	void *buf;
+};
+
 /**
  * struct ubi_volume - UBI volume description data structure.
  * @dev: device object to make use of the the Linux device model
@@ -359,6 +367,7 @@ struct ubi_volume {
 	void *upd_buf;
 
 	struct ubi_eba_table *eba_tbl;
+	struct ubi_consolidation_ctx consolidation;
 	struct mutex eba_lock;
 	unsigned int checked:1;
 	unsigned int corrupted:1;
