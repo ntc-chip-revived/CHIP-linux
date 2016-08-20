@@ -274,7 +274,6 @@ struct ubi_leb_desc {
 	int lnum;
 	int pnum;
 	int lpos;
-	bool consolidated;
 };
 
 struct ubi_consolidation_ctx {
@@ -868,10 +867,8 @@ void ubi_eba_destroy_table(struct ubi_eba_table *tbl);
 void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
 			int nentries);
 void ubi_eba_set_table(struct ubi_volume *vol, struct ubi_eba_table *tbl);
-int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum);
 void ubi_eba_get_ldesc(struct ubi_volume *vol, int lnum,
 		       struct ubi_leb_desc *ldesc);
-void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum);
 bool ubi_eba_is_mapped(struct ubi_volume *vol, int lnum);
 int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 		      int lnum);

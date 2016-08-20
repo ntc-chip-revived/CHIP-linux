@@ -448,7 +448,8 @@ bool ubi_eba_invalidate_leb_locked(struct ubi_volume *vol,
 
 	if (!vol->mlc_safe) {
 		vol->eba_tbl->descs[lnum].pnum = UBI_LEB_UNMAPPED;
-	} else if (ldesc->consolidated) {
+	} else if (ldesc->lpos < 0) {
+		/* The LEB is not consolidated. */
 		if (ldesc->pnum != UBI_LEB_UNMAPPED) {
 			list_del_init(&vol->eba_tbl->cdescs[lnum].node);
 			if (!consolidating)
@@ -530,7 +531,8 @@ bool ubi_eba_invalidate_leb_locked(struct ubi_volume *vol,
 	return release_peb;
 }
 
-bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
+static bool ubi_eba_invalidate_leb(struct ubi_volume *vol,
+				   struct ubi_leb_desc *ldesc)
 {
 	bool release_peb;
 
@@ -539,6 +541,29 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 	mutex_lock(&vol->eba_lock);
 
 	return release_peb;
+}
+
+/* TODO: Get rid of ubi_eba_get_pnum() and ubi_eba_set_pnum() */
+static int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
+{
+	int pnum;
+
+	if (!vol->mlc_safe)
+		pnum = vol->eba_tbl->cdescs[lnum].pnum;
+	else if (test_bit(lnum, vol->eba_tbl->consolidated))
+		pnum = vol->eba_tbl->cdescs[lnum].cpeb->pnum;
+	else
+		pnum = vol->eba_tbl->descs[lnum].pnum;
+
+	return pnum;
+}
+
+static void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
+{
+	if (!vol->mlc_safe)
+		vol->eba_tbl->descs[lnum].pnum = pnum;
+	else
+		vol->eba_tbl->cdescs[lnum].pnum = pnum;
 }
 
 static int ubi_eba_put_peb(struct ubi_volume *vol, int lnum, int pnum,
@@ -627,11 +652,12 @@ static int read_leb(struct ubi_volume *vol, void *buf,
 {
 	struct ubi_device *ubi = vol->ubi;
 	int offset = loffset + ubi->leb_start;
+	int lpos = vol->mlc_safe ? ldesc->lpos : 0;
 
-	if (ldesc->lpos < 0)
+	if (lpos < 0)
 		return ubi_io_slc_read(ubi, buf, ldesc->pnum, offset, len);
 
-	offset += ldesc->lpos * vol->leb_size;
+	offset += lpos * vol->leb_size;
 
 	return ubi_io_read(ubi, buf, ldesc->pnum, offset, len);
 }
@@ -641,13 +667,12 @@ static int write_leb(struct ubi_volume *vol, const void *buf,
 {
 	struct ubi_device *ubi = vol->ubi;
 	int offset = loffset + ubi->leb_start;
+	int lpos = vol->mlc_safe ? ldesc->lpos : 0;
 
-	ubi_assert(ldesc->consolidated);
-
-	if (ldesc->lpos < 0)
+	if (lpos < 0)
 		return ubi_io_slc_write(ubi, buf, ldesc->pnum, offset, len);
 
-	offset += ldesc->lpos * vol->leb_size;
+	offset += lpos * vol->leb_size;
 
 	return ubi_io_write(ubi, buf, ldesc->pnum, offset, len);
 }
@@ -657,7 +682,7 @@ static void leb_updated(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 	struct ubi_eba_cdesc *cdesc;
 	int lnum = ldesc->lnum;
 
-	ubi_assert(!ldesc->consolidated && ldesc->lpos < 1);
+	ubi_assert(ldesc->lpos < 0);
 
 	if (!vol->eba_tbl->consolidated)
 		return;
@@ -1018,7 +1043,7 @@ static int unconsolidate_leb(struct ubi_volume *vol,
 	int pnum, err, vol_id = vol->vol_id, lnum = ldesc->lnum;
 	u32 crc;
 
-	if (!ldesc->consolidated || !len)
+	if (ldesc->lpos < 0 || !len)
 		return 0;
 
 	/* Get a new PEB. */
@@ -1065,7 +1090,6 @@ static int unconsolidate_leb(struct ubi_volume *vol,
 	vol->eba_tbl->cdescs[lnum].pnum = pnum;
 	up_read(&ubi->fm_eba_sem);
 	ldesc->pnum = pnum;
-	ldesc->consolidated = false;
 	ldesc->lpos = -1;
 
 	return 0;
@@ -1359,9 +1383,9 @@ write_error:
 int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 			      int lnum, const void *buf, int len)
 {
-	int err, pnum, old_pnum, tries = 0, vol_id = vol->vol_id;
+	int err, tries = 0, vol_id = vol->vol_id;
 	struct ubi_vid_hdr *vid_hdr;
-	struct ubi_leb_desc ldesc;
+	struct ubi_leb_desc ldesc, oldesc;
 	uint32_t crc;
 
 	if (ubi->ro_mode)
@@ -1387,6 +1411,10 @@ int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 	if (err)
 		goto out_mutex;
 
+	ubi_eba_get_ldesc(vol, lnum, &oldesc);
+	ldesc.lpos = -1;
+	ldesc.lnum = lnum;
+
 	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 	vid_hdr->vol_id = cpu_to_be32(vol_id);
 	vid_hdr->lnum = cpu_to_be32(lnum);
@@ -1400,28 +1428,21 @@ int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 	vid_hdr->data_crc = cpu_to_be32(crc);
 
 retry:
-	pnum = ubi_eba_get_peb(vol);
-	if (pnum < 0) {
-		err = pnum;
+	ldesc.pnum = ubi_eba_get_peb(vol);
+	if (ldesc.pnum < 0) {
+		err = ldesc.pnum;
 		up_read(&ubi->fm_eba_sem);
 		goto out_leb_unlock;
 	}
 
-	/* TODO: hide that in ubi_eba_get_peb() */
-	ldesc.pnum = pnum;
-	ldesc.consolidated = false;
-	if (vol->mlc_safe)
-		ldesc.lpos = -1;
-	else
-		ldesc.lpos = 0;
 
 	dbg_eba("change LEB %d:%d, PEB %d, write VID hdr to PEB %d",
-		vol_id, lnum, ubi_eba_get_pnum(vol, lnum), pnum);
+		vol_id, oldesc.lnum, oldesc.pnum, ldesc.pnum);
 
-	err = ubi_io_write_vid_hdr(ubi, pnum, vid_hdr);
+	err = ubi_io_write_vid_hdr(ubi, ldesc.pnum, vid_hdr);
 	if (err) {
 		ubi_warn(ubi, "failed to write VID header to LEB %d:%d, PEB %d",
-			 vol_id, lnum, pnum);
+			 vol_id, lnum, ldesc.pnum);
 		up_read(&ubi->fm_eba_sem);
 		goto write_error;
 	}
@@ -1429,20 +1450,19 @@ retry:
 	err = write_leb(vol, buf, &ldesc, 0, len);
 	if (err) {
 		ubi_warn(ubi, "failed to write %d bytes of data to PEB %d",
-			 len, pnum);
+			 len, ldesc.pnum);
 		up_read(&ubi->fm_eba_sem);
 		goto write_error;
 	}
 
-	old_pnum = ubi_eba_get_pnum(vol, lnum);
-	ubi_eba_set_pnum(vol, lnum, pnum);
+	ubi_eba_set_pnum(vol, lnum, ldesc.pnum);
 
 	/* LEB has been updated, put it at the beginning of the used list. */
 	leb_updated(vol, &ldesc);
 	up_read(&ubi->fm_eba_sem);
 
-	if (old_pnum >= 0) {
-		err = ubi_eba_put_peb(vol, lnum, old_pnum, 0);
+	if (oldesc.pnum >= 0) {
+		err = ubi_eba_put_peb(vol, lnum, oldesc.pnum, 0);
 		if (err)
 			goto out_leb_unlock;
 	}
@@ -1465,7 +1485,7 @@ write_error:
 		goto out_leb_unlock;
 	}
 
-	err = ubi_eba_put_peb(vol, lnum, pnum, 1);
+	err = ubi_eba_put_peb(vol, lnum, ldesc.pnum, 1);
 	if (err || ++tries > UBI_IO_RETRIES) {
 		ubi_ro_mode(ubi);
 		goto out_leb_unlock;
@@ -1542,7 +1562,6 @@ static void reset_consolidation(struct ubi_consolidation_ctx *ctx)
 	ctx->ldesc.lnum = UBI_LEB_UNMAPPED;
 	ctx->ldesc.pnum = -1;
 	ctx->ldesc.lpos = -1;
-	ctx->ldesc.consolidated = 0;
 	ctx->loffset = 0;
 	ctx->cpeb = NULL;
 }
@@ -1959,6 +1978,7 @@ int ubi_eba_copy_peb(struct ubi_device *ubi, int from, int to,
 		     struct ubi_vid_hdr *vid_hdr)
 {
 	int err, vol_id, lnum, data_size, aldata_size, idx;
+	struct ubi_leb_desc ldesc;
 	struct ubi_volume *vol;
 	uint32_t crc;
 
@@ -2009,9 +2029,10 @@ int ubi_eba_copy_peb(struct ubi_device *ubi, int from, int to,
 	 * probably waiting on @ubi->move_mutex. No need to continue the work,
 	 * cancel it.
 	 */
-	if (ubi_eba_get_pnum(vol, lnum) != from) {
+	ubi_eba_get_ldesc(vol, lnum, &ldesc);
+	if (ldesc.pnum != from) {
 		dbg_wl("LEB %d:%d is no longer mapped to PEB %d, mapped to PEB %d, cancel",
-		       vol_id, lnum, from, ubi_eba_get_pnum(vol, lnum));
+		       vol_id, lnum, from, ldesc.pnum);
 		err = MOVE_CANCEL_RACE;
 		goto out_unlock_leb;
 	}
@@ -2103,7 +2124,8 @@ int ubi_eba_copy_peb(struct ubi_device *ubi, int from, int to,
 		cond_resched();
 	}
 
-	ubi_assert(ubi_eba_get_pnum(vol, lnum) == from);
+	ubi_eba_get_ldesc(vol, lnum, &ldesc);
+	ubi_assert(ldesc.pnum == from);
 	down_read(&ubi->fm_eba_sem);
 	ubi_eba_set_pnum(vol, lnum, to);
 	up_read(&ubi->fm_eba_sem);
@@ -2257,8 +2279,7 @@ void ubi_eba_get_ldesc(struct ubi_volume *vol, int lnum,
 {
 	if (!vol->mlc_safe) {
 		ldesc->pnum = vol->eba_tbl->descs[lnum].pnum;
-		ldesc->lpos = 0;
-		ldesc->consolidated = false;
+		ldesc->lpos = -1;
 	} else if (test_bit(lnum, vol->eba_tbl->consolidated)) {
 		struct ubi_consolidated_peb *cpeb =
 				vol->eba_tbl->cdescs[lnum].cpeb;
@@ -2273,36 +2294,12 @@ void ubi_eba_get_ldesc(struct ubi_volume *vol, int lnum,
 		ubi_assert(i < lebs_per_cpeb);
 		ldesc->lpos = i;
 		ldesc->pnum = cpeb->pnum;
-		ldesc->consolidated = true;
 	} else {
 		ldesc->pnum = vol->eba_tbl->descs[lnum].pnum;
 		ldesc->lpos = -1;
-		ldesc->consolidated = false;
 	}
 
 	ldesc->lnum = lnum;
-}
-
-int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
-{
-	int pnum;
-
-	if (!vol->mlc_safe)
-		pnum = vol->eba_tbl->cdescs[lnum].pnum;
-	else if (test_bit(lnum, vol->eba_tbl->consolidated))
-		pnum = vol->eba_tbl->cdescs[lnum].cpeb->pnum;
-	else
-		pnum = vol->eba_tbl->descs[lnum].pnum;
-
-	return pnum;
-}
-
-void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
-{
-	if (!vol->mlc_safe)
-		vol->eba_tbl->descs[lnum].pnum = pnum;
-	else
-		vol->eba_tbl->cdescs[lnum].pnum = pnum;
 }
 
 void ubi_eba_set_cpeb(struct ubi_volume *vol, int lnum,

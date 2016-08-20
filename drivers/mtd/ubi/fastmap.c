@@ -1266,6 +1266,7 @@ static int ubi_write_fastmap(struct ubi_device *ubi,
 		fvh->used_ebs = cpu_to_be32(vol->used_ebs);
 		fvh->data_pad = cpu_to_be32(vol->data_pad);
 		fvh->last_eb_bytes = cpu_to_be32(vol->last_eb_bytes);
+
 		if (vol->mlc_safe)
 			fvh->flags |= UBI_FM_VOL_MLC_SAFE_FLG;
 
@@ -1287,8 +1288,6 @@ static int ubi_write_fastmap(struct ubi_device *ubi,
 			} else {
 				feba->descs[j].pnum = ldesc.pnum;
 			}
-
-			feba->descs[j].pnum = cpu_to_be32(ubi_eba_get_pnum(vol, j));
 		}
 
 		feba->reserved_pebs = cpu_to_be32(j);
