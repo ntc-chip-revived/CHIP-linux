@@ -543,20 +543,7 @@ static bool ubi_eba_invalidate_leb(struct ubi_volume *vol,
 	return release_peb;
 }
 
-/* TODO: Get rid of ubi_eba_get_pnum() and ubi_eba_set_pnum() */
-static int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
-{
-	int pnum;
-
-	if (!vol->mlc_safe)
-		pnum = vol->eba_tbl->cdescs[lnum].pnum;
-	else if (test_bit(lnum, vol->eba_tbl->consolidated))
-		pnum = vol->eba_tbl->cdescs[lnum].cpeb->pnum;
-	else
-		pnum = vol->eba_tbl->descs[lnum].pnum;
-
-	return pnum;
-}
+/* TODO: Get rid of ubi_eba_set_pnum() */
 
 static void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
 {
@@ -1329,7 +1316,7 @@ retry:
 		goto write_error;
 	}
 
-	ubi_assert(ubi_eba_get_pnum(vol, lnum) < 0);
+	ubi_assert(!ubi_eba_is_mapped(vol, lnum));
 	ubi_eba_set_pnum(vol, lnum, pnum);
 	up_read(&ubi->fm_eba_sem);
 
@@ -1971,8 +1958,7 @@ static void consolidation_work(struct work_struct *work)
  */
 
 /*
- * TODO: rename into ubi_eba_copy_peb() and support the consolidated PEB
- * case
+ * TODO: support the consolidated PEB case.
  */
 int ubi_eba_copy_peb(struct ubi_device *ubi, int from, int to,
 		     struct ubi_vid_hdr *vid_hdr)
