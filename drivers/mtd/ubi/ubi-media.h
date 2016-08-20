@@ -483,12 +483,15 @@ struct ubi_fm_ec {
 	__be32 ec;
 } __packed;
 
+#define UBI_FM_VOL_MLC_SAFE_FLG		BIT(0)
+
 /**
  * struct ubi_fm_volhdr - Fastmap volume header
  * it identifies the start of an eba table
  * @magic: Fastmap volume header magic number (%UBI_FM_VHDR_MAGIC)
  * @vol_id: volume id of the fastmapped volume
  * @vol_type: type of the fastmapped volume
+ * @flags: volume flags (%)
  * @data_pad: data_pad value of the fastmapped volume
  * @used_ebs: number of used LEBs within this volume
  * @last_eb_bytes: number of bytes used in the last LEB
@@ -497,7 +500,8 @@ struct ubi_fm_volhdr {
 	__be32 magic;
 	__be32 vol_id;
 	__u8 vol_type;
-	__u8 padding1[3];
+	__u8 flags;
+	__u8 padding1[2];
 	__be32 data_pad;
 	__be32 used_ebs;
 	__be32 last_eb_bytes;
@@ -505,6 +509,15 @@ struct ubi_fm_volhdr {
 } __packed;
 
 /* struct ubi_fm_volhdr is followed by one struct ubi_fm_eba records */
+
+struct ubi_fm_eba_desc {
+	__be32 pnum;
+} __packed;
+
+struct ubi_fm_eba_cdesc {
+	__be32 pnum;
+	__be32 lpos;
+} __packed;
 
 /**
  * struct ubi_fm_eba - denotes an association between a PEB and LEB
@@ -515,6 +528,9 @@ struct ubi_fm_volhdr {
 struct ubi_fm_eba {
 	__be32 magic;
 	__be32 reserved_pebs;
-	__be32 pnum[0];
+	union {
+		struct ubi_fm_eba_desc descs[0];
+		struct ubi_fm_eba_cdesc cdescs[0];
+	};
 } __packed;
 #endif /* !__UBI_MEDIA_H__ */

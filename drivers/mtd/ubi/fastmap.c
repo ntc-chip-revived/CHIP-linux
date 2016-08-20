@@ -773,7 +773,7 @@ static int ubi_attach_fastmap(struct ubi_device *ubi,
 		}
 
 		for (j = 0; j < be32_to_cpu(fm_eba->reserved_pebs); j++) {
-			int pnum = be32_to_cpu(fm_eba->pnum[j]);
+			int pnum = be32_to_cpu(fm_eba->descs[j].pnum);
 
 			if (pnum < 0)
 				continue;
@@ -1242,10 +1242,17 @@ static int ubi_write_fastmap(struct ubi_device *ubi,
 	fmh->erase_peb_count = cpu_to_be32(erase_peb_count);
 
 	for (i = 0; i < UBI_MAX_VOLUMES + UBI_INT_VOL_COUNT; i++) {
+		int desc_size;
+
 		vol = ubi->volumes[i];
 
 		if (!vol)
 			continue;
+
+		if (vol->mlc_safe)
+			desc_size = sizeof(struct ubi_fm_eba_cdesc);
+		else
+			desc_size = sizeof(struct ubi_fm_eba_desc);
 
 		vol_count++;
 
@@ -1259,16 +1266,30 @@ static int ubi_write_fastmap(struct ubi_device *ubi,
 		fvh->used_ebs = cpu_to_be32(vol->used_ebs);
 		fvh->data_pad = cpu_to_be32(vol->data_pad);
 		fvh->last_eb_bytes = cpu_to_be32(vol->last_eb_bytes);
+		if (vol->mlc_safe)
+			fvh->flags |= UBI_FM_VOL_MLC_SAFE_FLG;
 
 		ubi_assert(vol->vol_type == UBI_DYNAMIC_VOLUME ||
 			vol->vol_type == UBI_STATIC_VOLUME);
 
 		feba = (struct ubi_fm_eba *)(fm_raw + fm_pos);
-		fm_pos += sizeof(*feba) + (sizeof(__be32) * vol->avail_lebs);
+		fm_pos += sizeof(*feba) + (desc_size * vol->avail_lebs);
 		ubi_assert(fm_pos <= ubi->fm_size);
 
-		for (j = 0; j < vol->avail_lebs; j++)
-			feba->pnum[j] = cpu_to_be32(ubi_eba_get_pnum(vol, j));
+		for (j = 0; j < vol->avail_lebs; j++) {
+			struct ubi_leb_desc ldesc;
+
+			ubi_eba_get_ldesc(vol, j, &ldesc);
+
+			if (vol->mlc_safe) {
+				feba->cdescs[j].pnum = ldesc.pnum;
+				feba->cdescs[j].lpos = ldesc.lpos;
+			} else {
+				feba->descs[j].pnum = ldesc.pnum;
+			}
+
+			feba->descs[j].pnum = cpu_to_be32(ubi_eba_get_pnum(vol, j));
+		}
 
 		feba->reserved_pebs = cpu_to_be32(j);
 		feba->magic = cpu_to_be32(UBI_FM_EBA_MAGIC);
