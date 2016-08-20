@@ -97,8 +97,7 @@ struct ubi_eba_table {
 		struct list_head clean;
 		struct list_head *dirty;
 	} closed;
-
-//	struct ubi_consolidation_ctx consolidation;
+	int free_pebs;
 };
 
 /* Number of physical eraseblocks reserved for atomic LEB change operation */
@@ -525,6 +524,9 @@ bool ubi_eba_invalidate_leb_locked(struct ubi_volume *vol,
 			release_peb = false;
 	}
 
+	if (release_peb)
+		vol->eba_tbl->free_pebs++;
+
 	return release_peb;
 }
 
@@ -537,6 +539,41 @@ bool ubi_eba_invalidate_leb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc)
 	mutex_lock(&vol->eba_lock);
 
 	return release_peb;
+}
+
+static int ubi_eba_put_peb(struct ubi_volume *vol, int lnum, int pnum,
+			    int torture)
+{
+	int err;
+
+	err = ubi_wl_put_peb(vol->ubi, vol->vol_id, lnum, pnum, torture);
+	if (err)
+		return err;
+
+	mutex_lock(&vol->eba_lock);
+	vol->eba_tbl->free_pebs++;
+	mutex_unlock(&vol->eba_lock);
+
+	return 0;
+}
+
+static int ubi_eba_get_peb(struct ubi_volume *vol)
+{
+	/*
+	 * TODO: check number of free PEBs, force/wait for consolidation
+	 * if there's not enough, otherwise ask WL layer for a free PEB.
+	 */
+
+	mutex_lock(&vol->eba_lock);
+	while (vol->eba_tbl->free_pebs < 1) {
+		mutex_unlock(&vol->eba_lock);
+		mutex_lock(&vol->eba_lock);
+	}
+	vol->eba_tbl->free_pebs--;
+	mutex_unlock(&vol->eba_lock);
+	ubi_assert(vol->eba_tbl->free_pebs > 0);
+
+	return ubi_wl_get_peb(vol->ubi);
 }
 
 /**
@@ -577,7 +614,7 @@ int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 	if (release_peb) {
 		dbg_eba("release PEB %d after LEB %d:%d invalidation",
 			ldesc.pnum, vol_id, lnum);
-		err = ubi_wl_put_peb(ubi, vol_id, lnum, ldesc.pnum, 0);
+		err = ubi_eba_put_peb(vol, lnum, ldesc.pnum, 0);
 	}
 
 out_unlock:
@@ -883,7 +920,7 @@ static int recover_peb(struct ubi_volume *vol, struct ubi_leb_desc *ldesc,
 retry:
 	/*
 	 * We do not use the ubi_eba_get_peb() helper here because we know
-	 * it another one will be released at some point.
+	 * another one will be released at some point.
 	 */
 	new_pnum = ubi_wl_get_peb(ubi);
 	if (new_pnum < 0) {
@@ -969,15 +1006,6 @@ write_error:
 	goto retry;
 }
 
-int ubi_eba_get_peb(struct ubi_volume *vol)
-{
-	/*
-	 * TODO: check number of free PEBs, force/wait for consolidation
-	 * if there's not enough, otherwise ask WL layer for a free PEB.
-	 * */
-	return ubi_wl_get_peb(vol->ubi);
-}
-
 /**
  * Must be called the LEB lock held in write mode.
  */
@@ -1030,10 +1058,12 @@ static int unconsolidate_leb(struct ubi_volume *vol,
 
 	/* Release the PEB if we were the last user. */
 	if (ubi_eba_invalidate_leb(vol, ldesc))
-		ubi_wl_put_peb(ubi, vol_id, lnum, ldesc->pnum, 0);
+		ubi_eba_put_peb(vol, lnum, ldesc->pnum, 0);
 
 	/* Update the EBA entry and LEB descriptor. */
+	down_read(&ubi->fm_eba_sem);
 	vol->eba_tbl->cdescs[lnum].pnum = pnum;
+	up_read(&ubi->fm_eba_sem);
 	ldesc->pnum = pnum;
 	ldesc->consolidated = false;
 	ldesc->lpos = -1;
@@ -1042,7 +1072,7 @@ static int unconsolidate_leb(struct ubi_volume *vol,
 
 err_unlock_buf:
 	mutex_unlock(&ubi->buf_mutex);
-	ubi_wl_put_peb(ubi, vol_id, lnum, pnum, 0);
+	ubi_eba_put_peb(vol, lnum, pnum, 0);
 
 	return err;
 }
@@ -1174,7 +1204,7 @@ write_error:
 	 * eraseblock, so just put it and request a new one. We assume that if
 	 * this physical eraseblock went bad, the erase code will handle that.
 	 */
-	err = ubi_wl_put_peb(ubi, vol_id, lnum, ldesc.pnum, 1);
+	err = ubi_eba_put_peb(vol, lnum, ldesc.pnum, 1);
 	if (err || ++tries > UBI_IO_RETRIES) {
 		ubi_ro_mode(ubi);
 		leb_write_unlock(ubi, vol_id, lnum);
@@ -1296,7 +1326,7 @@ write_error:
 		return err;
 	}
 
-	err = ubi_wl_put_peb(ubi, vol_id, lnum, pnum, 1);
+	err = ubi_eba_put_peb(vol, lnum, pnum, 1);
 	if (err || ++tries > UBI_IO_RETRIES) {
 		ubi_ro_mode(ubi);
 		leb_write_unlock(ubi, vol_id, lnum);
@@ -1412,7 +1442,7 @@ retry:
 	up_read(&ubi->fm_eba_sem);
 
 	if (old_pnum >= 0) {
-		err = ubi_wl_put_peb(ubi, vol_id, lnum, old_pnum, 0);
+		err = ubi_eba_put_peb(vol, lnum, old_pnum, 0);
 		if (err)
 			goto out_leb_unlock;
 	}
@@ -1435,7 +1465,7 @@ write_error:
 		goto out_leb_unlock;
 	}
 
-	err = ubi_wl_put_peb(ubi, vol_id, lnum, pnum, 1);
+	err = ubi_eba_put_peb(vol, lnum, pnum, 1);
 	if (err || ++tries > UBI_IO_RETRIES) {
 		ubi_ro_mode(ubi);
 		goto out_leb_unlock;
@@ -1684,7 +1714,7 @@ static int finish_consolidation(struct ubi_volume *vol)
 
 	olnums = opnums + lebs_per_cpeb;
 
-	/* Try to lock all consolidated LEBs in read mode. */
+	/* Try to lock all consolidated LEBs in write mode. */
 	for (locked = 0; locked < lebs_per_cpeb; locked++) {
 		err = leb_write_trylock(ubi, vol->vol_id, cpeb->lnums[locked]);
 		if (!err)
@@ -1739,10 +1769,16 @@ static int finish_consolidation(struct ubi_volume *vol)
 		struct ubi_leb_desc ldesc;
 
 		ubi_eba_get_ldesc(vol, lnum, &ldesc);
-		if (ubi_eba_invalidate_leb_locked(vol, &ldesc, true))
+		if (ubi_eba_invalidate_leb_locked(vol, &ldesc, true)) {
+			/*
+			 * We are about to release this PEB, update the free
+			 * PEB counter accordingly.
+			 */
+			vol->eba_tbl->free_pebs++;
 			opnums[i] = ldesc.pnum;
-		else
+		} else {
 			opnums[i] = -1;
+		}
 
 		olnums[i] = lnum;
 
@@ -1756,6 +1792,10 @@ static int finish_consolidation(struct ubi_volume *vol)
 		set_bit(lnum, vol->eba_tbl->consolidated);
 	}
 	reset_consolidation(&vol->consolidation);
+
+	/* Consolidation took one PEB. */
+	vol->eba_tbl->free_pebs--;
+
 	mutex_unlock(&vol->eba_lock);
 	up_read(&ubi->fm_eba_sem);
 
@@ -1836,6 +1876,64 @@ cancel:
 	cancel_consolidation(vol);
 
 	return err;
+}
+
+static bool consolidation_possible(struct ubi_volume *vol)
+{
+	/* TODO: check the number of open and dirty PEBs. */
+	return true;
+}
+
+static bool consolidation_required(struct ubi_volume *vol)
+{
+	/*
+	 * TODO: consolidation is required when some UBI users are
+	 * waiting for open LEBs.
+	 */
+	return false;
+}
+
+static bool consolidation_recommended(struct ubi_volume *vol)
+{
+	/*
+	 * TODO: consolidation when the number of availables go
+	 * below 1/3 of the total number of PEBs?
+	 */
+	return false;
+}
+
+static void consolidation_work(struct work_struct *work)
+{
+	struct ubi_consolidation_ctx *conso = container_of(work,
+						struct ubi_consolidation_ctx,
+						work);
+	struct ubi_volume *vol = container_of(conso, struct ubi_volume,
+					      consolidation);
+	int err;
+
+	/*
+	 * TODO: decide when to continue consolidating and when to
+	 * reschedule.
+	 */
+	while (true) {
+		err = consolidation_step(vol);
+		if (err != -EAGAIN) {
+			if (!consolidation_required(vol)) {
+				schedule_work(work);
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Make sure we never run into a case where consolidation is required
+	 * but impossible.
+	 */
+	ubi_assert(!consolidation_required(vol) ||
+		   consolidation_possible(vol));
+
+	if (consolidation_required(vol))
+		schedule_work(work);
 }
 
 /**
@@ -2191,7 +2289,7 @@ int ubi_eba_get_pnum(struct ubi_volume *vol, int lnum)
 
 	if (!vol->mlc_safe)
 		pnum = vol->eba_tbl->cdescs[lnum].pnum;
-	else if (vol->eba_tbl->consolidated)
+	else if (test_bit(lnum, vol->eba_tbl->consolidated))
 		pnum = vol->eba_tbl->cdescs[lnum].cpeb->pnum;
 	else
 		pnum = vol->eba_tbl->descs[lnum].pnum;
@@ -2214,6 +2312,21 @@ void ubi_eba_set_cpeb(struct ubi_volume *vol, int lnum,
 	ubi_assert(vol->eba_tbl->consolidated);
 
 	set_bit(lnum, vol->eba_tbl->consolidated);
+
+}
+
+bool ubi_eba_is_mapped(struct ubi_volume *vol, int lnum)
+{
+	int pnum;
+
+	if (!vol->mlc_safe)
+		pnum = vol->eba_tbl->cdescs[lnum].pnum;
+	else if (test_bit(lnum, vol->eba_tbl->consolidated))
+		pnum = vol->eba_tbl->cdescs[lnum].cpeb->pnum;
+	else
+		pnum = vol->eba_tbl->descs[lnum].pnum;
+
+	return pnum >= 0;
 }
 
 struct ubi_eba_table *ubi_eba_create_table(struct ubi_volume *vol, int nlebs)
@@ -2440,6 +2553,8 @@ int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 			else
 				ubi_eba_set_pnum(vol, aeb->lnum, aeb->pnum);
 		}
+
+		vol->eba_tbl->free_pebs = ubi_eba_count_free_pebs(vol);
 	}
 
 	if (ubi->avail_pebs < EBA_RESERVED_PEBS) {

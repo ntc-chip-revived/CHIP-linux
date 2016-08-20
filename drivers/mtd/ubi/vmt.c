@@ -494,6 +494,14 @@ int ubi_remove_volume(struct ubi_volume_desc *desc, int no_vtbl)
 			goto out_err;
 	}
 
+	/*
+	 * Make sure the consolidation worker has finished his job before
+	 * removing the device.
+	 * We've unmapped all the volume LEBs, so the consolidation should
+	 * either be inactive or marked for cancellation.
+	 */
+//	ubi_eba_sync_consolidation(ubi, vol);
+
 	cdev_del(&vol->cdev);
 	device_unregister(&vol->dev);
 
