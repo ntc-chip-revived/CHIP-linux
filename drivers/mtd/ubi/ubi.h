@@ -655,18 +655,30 @@ struct ubi_device {
 	struct ubi_debug_info dbg;
 };
 
+struct ubi_ainf_leb {
+	union {
+		 struct list_head list;
+		 struct rb_node rb;
+	};
+	int copy_flag:1;
+	int invalid:1;
+	int lpos;
+	int lnum;
+};
+
 /**
  * struct ubi_ainf_peb - attach information about a physical eraseblock.
  * @ec: erase counter (%UBI_UNKNOWN if it is unknown)
  * @pnum: physical eraseblock number
  * @vol_id: ID of the volume this LEB belongs to
- * @lnum: logical eraseblock number
  * @scrub: if this physical eraseblock needs scrubbing
  * @copy_flag: this LEB is a copy (@copy_flag is set in VID header of this LEB)
+ * @consolidated: this PEB is consolidated
  * @sqnum: sequence number
  * @u: unions RB-tree or @list links
  * @u.rb: link in the per-volume RB-tree of &struct ubi_ainf_peb objects
  * @u.list: link in one of the eraseblock lists
+ * @lnums: logical eraseblock numbers
  *
  * One object of this type is allocated for each physical eraseblock when
  * attaching an MTD device. Note, if this PEB does not belong to any LEB /
@@ -676,14 +688,15 @@ struct ubi_ainf_peb {
 	int ec;
 	int pnum;
 	int vol_id;
-	int lnum;
 	unsigned int scrub:1;
-	unsigned int copy_flag:1;
+	unsigned int consolidated:1;
 	unsigned long long sqnum;
-	union {
-		struct rb_node rb;
-		struct list_head list;
-	} u;
+
+	/*
+	 * This field should remain at the end of this struct: we're extending
+	 * lebs size at allocation time.
+	 */
+	struct ubi_ainf_leb lebs[1];
 };
 
 /**
@@ -712,6 +725,8 @@ struct ubi_ainf_volume {
 	int highest_lnum;
 	int leb_count;
 	int vol_type;
+	int mlc_safe;
+	int lebs_per_cpeb;
 	int used_ebs;
 	int last_data_size;
 	int data_pad;
@@ -812,7 +827,8 @@ extern struct blocking_notifier_head ubi_notifiers;
 
 /* attach.c */
 int ubi_add_to_av(struct ubi_device *ubi, struct ubi_attach_info *ai, int pnum,
-		  int ec, const struct ubi_vid_hdr *vid_hdr, int bitflips);
+		  int ec, const struct ubi_vid_hdr *vid_hdrs, int nhdrs,
+		  int bitflips);
 struct ubi_ainf_volume *ubi_find_av(const struct ubi_attach_info *ai,
 				    int vol_id);
 void ubi_remove_av(struct ubi_attach_info *ai, struct ubi_ainf_volume *av);
@@ -952,7 +968,7 @@ void ubi_do_get_device_info(struct ubi_device *ubi, struct ubi_device_info *di);
 void ubi_do_get_volume_info(struct ubi_device *ubi, struct ubi_volume *vol,
 			    struct ubi_volume_info *vi);
 /* scan.c */
-int ubi_compare_lebs(struct ubi_device *ubi, const struct ubi_ainf_peb *aeb,
+int ubi_compare_lebs(struct ubi_device *ubi, const struct ubi_ainf_leb *aleb,
 		      int pnum, const struct ubi_vid_hdr *vid_hdr);
 
 /* fastmap.c */
@@ -1035,6 +1051,15 @@ static inline int ubiblock_remove(struct ubi_volume_info *vi)
 	     rb = rb_next(rb),                                               \
 	     pos = (rb ? container_of(rb, typeof(*pos), member) : NULL))
 
+static inline struct ubi_ainf_peb *
+ubi_ainf_leb_to_peb(struct ubi_ainf_leb *leb)
+{
+	/* Get the pointer to the first leb. */
+	leb -= leb->lpos;
+
+	return container_of(leb, struct ubi_ainf_peb, lebs[0]);
+}
+
 /*
  * ubi_move_aeb_to_list - move a PEB from the volume tree to a list.
  *
@@ -1042,12 +1067,24 @@ static inline int ubiblock_remove(struct ubi_volume_info *vi)
  * @aeb: attaching eraseblock information
  * @list: the list to move to
  */
-static inline void ubi_move_aeb_to_list(struct ubi_ainf_volume *av,
-					 struct ubi_ainf_peb *aeb,
-					 struct list_head *list)
+static inline void ubi_move_aeb_to_list(struct ubi_device *ubi,
+					struct ubi_ainf_volume *av,
+					struct ubi_ainf_leb *leb,
+					struct list_head *list)
 {
-		rb_erase(&aeb->u.rb, &av->root);
-		list_add_tail(&aeb->u.list, list);
+	int lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
+	struct ubi_ainf_peb *peb = ubi_ainf_leb_to_peb(leb);
+	int i;
+
+	rb_erase(&leb->rb, &av->root);
+	leb->invalid = true;
+
+	for (i = 0; i < lebs_per_cpeb; i++) {
+		if (!peb->lebs[i].invalid && peb->lebs[i].lnum >= 0)
+			return;
+	}
+
+	list_add_tail(&peb->lebs[0].list, list);
 }
 
 /**

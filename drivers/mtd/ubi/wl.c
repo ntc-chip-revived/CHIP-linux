@@ -1513,7 +1513,8 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	int err, i, reserved_pebs, found_pebs = 0;
 	struct rb_node *rb1, *rb2;
 	struct ubi_ainf_volume *av;
-	struct ubi_ainf_peb *aeb, *tmp;
+	struct ubi_ainf_peb *apeb, *tmp;
+	struct ubi_ainf_leb *aleb;
 	struct ubi_wl_entry *e;
 
 	ubi->used = ubi->erroneous = ubi->free = ubi->scrub = RB_ROOT;
@@ -1535,17 +1536,18 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	ubi->pq_head = 0;
 
 	ubi->free_count = 0;
-	list_for_each_entry_safe(aeb, tmp, &ai->erase, u.list) {
+	list_for_each_entry_safe(apeb, tmp, &ai->erase, lebs[0].list) {
 		cond_resched();
 
 		e = kmem_cache_alloc(ubi_wl_entry_slab, GFP_KERNEL);
 		if (!e)
 			goto out_free;
 
-		e->pnum = aeb->pnum;
-		e->ec = aeb->ec;
+		e->pnum = apeb->pnum;
+		e->ec = apeb->ec;
 		ubi->lookuptbl[e->pnum] = e;
-		if (schedule_erase(ubi, e, aeb->vol_id, aeb->lnum, 0)) {
+		if (schedule_erase(ubi, e, apeb->vol_id,
+				   apeb->lebs[0].lnum, 0)) {
 			wl_entry_destroy(ubi, e);
 			goto out_free;
 		}
@@ -1553,15 +1555,15 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 		found_pebs++;
 	}
 
-	list_for_each_entry(aeb, &ai->free, u.list) {
+	list_for_each_entry(apeb, &ai->free, lebs[0].list) {
 		cond_resched();
 
 		e = kmem_cache_alloc(ubi_wl_entry_slab, GFP_KERNEL);
 		if (!e)
 			goto out_free;
 
-		e->pnum = aeb->pnum;
-		e->ec = aeb->ec;
+		e->pnum = apeb->pnum;
+		e->ec = apeb->ec;
 		ubi_assert(e->ec >= 0);
 
 		wl_tree_add(e, &ubi->free);
@@ -1573,18 +1575,22 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	}
 
 	ubi_rb_for_each_entry(rb1, av, &ai->volumes, rb) {
-		ubi_rb_for_each_entry(rb2, aeb, &av->root, u.rb) {
+		ubi_rb_for_each_entry(rb2, aleb, &av->root, rb) {
 			cond_resched();
+
+			apeb = ubi_ainf_leb_to_peb(aleb);
+			if (ubi->lookuptbl[apeb->pnum])
+				continue;
 
 			e = kmem_cache_alloc(ubi_wl_entry_slab, GFP_KERNEL);
 			if (!e)
 				goto out_free;
 
-			e->pnum = aeb->pnum;
-			e->ec = aeb->ec;
+			e->pnum = apeb->pnum;
+			e->ec = apeb->ec;
 			ubi->lookuptbl[e->pnum] = e;
 
-			if (!aeb->scrub) {
+			if (!apeb->scrub) {
 				dbg_wl("add PEB %d EC %d to the used tree",
 				       e->pnum, e->ec);
 				wl_tree_add(e, &ubi->used);
