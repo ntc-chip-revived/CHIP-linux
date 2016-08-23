@@ -115,18 +115,6 @@ static int cdesc_to_lnum(struct ubi_volume *vol, struct ubi_eba_cdesc *cdesc)
 	return idx;
 }
 
-static unsigned long long ubi_rsv_sqnums(struct ubi_device *ubi, int num)
-{
-	unsigned long long sqnum;
-
-	spin_lock(&ubi->ltree_lock);
-	sqnum = ubi->global_sqnum;
-	ubi->global_sqnum += num;
-	spin_unlock(&ubi->ltree_lock);
-
-	return sqnum;
-}
-
 /**
  * next_sqnum - get next sequence number.
  * @ubi: UBI device description object
@@ -137,7 +125,13 @@ static unsigned long long ubi_rsv_sqnums(struct ubi_device *ubi, int num)
  */
 unsigned long long ubi_next_sqnum(struct ubi_device *ubi)
 {
-	return ubi_rsv_sqnums(ubi, 1);
+	unsigned long long sqnum;
+
+	spin_lock(&ubi->ltree_lock);
+	sqnum = ubi->global_sqnum++;
+	spin_unlock(&ubi->ltree_lock);
+
+	return sqnum;
 }
 
 /**
@@ -551,7 +545,7 @@ static bool ubi_eba_invalidate_leb(struct ubi_volume *vol,
 
 /* TODO: Get rid of ubi_eba_set_pnum() */
 
-static void update_desc_pnum(struct ubi_volume *vol, int lnum, int pnum)
+static void ubi_eba_set_pnum(struct ubi_volume *vol, int lnum, int pnum)
 {
 	if (!vol->mlc_safe)
 		vol->eba_tbl->descs[lnum].pnum = pnum;
@@ -991,7 +985,7 @@ retry:
 	mutex_unlock(&ubi->buf_mutex);
 	ubi_free_vid_hdr(ubi, vid_hdr);
 
-	update_desc_pnum(vol, lnum, new_pnum);
+	ubi_eba_set_pnum(vol, lnum, new_pnum);
 	up_read(&ubi->fm_eba_sem);
 	ubi_wl_put_peb(ubi, vol_id, lnum, old_pnum, 1);
 
@@ -1197,7 +1191,7 @@ retry:
 	}
 
 	/* TODO: hide this set_pnum operation in an high-level helper? */
-	update_desc_pnum(vol, lnum, ldesc.pnum);
+	ubi_eba_set_pnum(vol, lnum, ldesc.pnum);
 
 	/* LEB has been updated, put it at the beginning of the used list. */
 	leb_updated(vol, &ldesc);
@@ -1323,7 +1317,7 @@ retry:
 	}
 
 	ubi_assert(!ubi_eba_is_mapped(vol, lnum));
-	update_desc_pnum(vol, lnum, pnum);
+	ubi_eba_set_pnum(vol, lnum, pnum);
 	up_read(&ubi->fm_eba_sem);
 
 	leb_write_unlock(ubi, vol_id, lnum);
@@ -1448,7 +1442,7 @@ retry:
 		goto write_error;
 	}
 
-	update_desc_pnum(vol, lnum, ldesc.pnum);
+	ubi_eba_set_pnum(vol, lnum, ldesc.pnum);
 
 	/* LEB has been updated, put it at the beginning of the used list. */
 	leb_updated(vol, &ldesc);
@@ -1718,7 +1712,6 @@ static int finish_consolidation(struct ubi_volume *vol)
 	int lebs_per_cpeb = mtd_pairing_groups_per_eb(ubi->mtd);
 	int err, offset, locked, i;
 	int *opnums, *olnums;
-	unsigned long long sqnum;
 
 	/* Allocate an array to store old pnum and lnum values. */
 	opnums = kmalloc(sizeof(opnums) * lebs_per_cpeb * 2, GFP_KERNEL);
@@ -1748,13 +1741,12 @@ static int finish_consolidation(struct ubi_volume *vol)
 
 	/* Pad with zeros. */
 	memset(ctx->buf, 0, ubi->min_io_size);
-	sqnum = ubi_rsv_sqnums(ubi, lebs_per_cpeb);
 	for (i = 0; i < lebs_per_cpeb; i++) {
 		u32 crc;
 
 		hdrs[i].magic = cpu_to_be32(UBI_VID_HDR_MAGIC);
 		hdrs[i].data_pad = cpu_to_be32(vol->data_pad);
-		hdrs[i].sqnum = cpu_to_be64(sqnum++);
+		hdrs[i].sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 		hdrs[i].vol_id = cpu_to_be32(vol->vol_id);
 		hdrs[i].lnum = cpu_to_be32(cpeb->lnums[i]);
 		hdrs[i].compat = ubi_get_compat(ubi, vol->vol_id);
@@ -2121,7 +2113,7 @@ int ubi_eba_copy_peb(struct ubi_device *ubi, int from, int to,
 	ubi_eba_get_ldesc(vol, lnum, &ldesc);
 	ubi_assert(ldesc.pnum == from);
 	down_read(&ubi->fm_eba_sem);
-	update_desc_pnum(vol, lnum, to);
+	ubi_eba_set_pnum(vol, lnum, to);
 	up_read(&ubi->fm_eba_sem);
 
 out_unlock_buf:
@@ -2189,8 +2181,7 @@ int self_check_eba(struct ubi_device *ubi, struct ubi_attach_info *ai_fastmap,
 	int **scan_eba, **fm_eba;
 	struct ubi_ainf_volume *av;
 	struct ubi_volume *vol;
-	struct ubi_ainf_leb *aleb;
-	struct ubi_ainf_peb *apeb;
+	struct ubi_ainf_peb *aeb;
 	struct rb_node *rb;
 
 	num_volumes = ubi->vtbl_slots + UBI_INT_VOL_COUNT;
@@ -2231,19 +2222,15 @@ int self_check_eba(struct ubi_device *ubi, struct ubi_attach_info *ai_fastmap,
 		if (!av)
 			continue;
 
-		ubi_rb_for_each_entry(rb, aleb, &av->root, rb) {
-			apeb = ubi_ainf_leb_to_peb(aleb);
-			scan_eba[i][aleb->lnum] = apeb->pnum;
-		}
+		ubi_rb_for_each_entry(rb, aeb, &av->root, u.rb)
+			scan_eba[i][aeb->lnum] = aeb->pnum;
 
 		av = ubi_find_av(ai_fastmap, idx2vol_id(ubi, i));
 		if (!av)
 			continue;
 
-		ubi_rb_for_each_entry(rb, aleb, &av->root, rb) {
-			apeb = ubi_ainf_leb_to_peb(aleb);
-			fm_eba[i][aleb->lnum] = apeb->pnum;
-		}
+		ubi_rb_for_each_entry(rb, aeb, &av->root, u.rb)
+			fm_eba[i][aeb->lnum] = aeb->pnum;
 
 		for (j = 0; j < vol->avail_lebs; j++) {
 			if (scan_eba[i][j] != fm_eba[i][j]) {
@@ -2412,7 +2399,7 @@ void ubi_eba_copy_table(struct ubi_volume *vol, struct ubi_eba_table *dst,
 			if (test_bit(i, src->consolidated)) {
 				/*
 				 * No need to copy the cpeb resource, only
-				 * ubi_leb_unmap() can free it.
+				 * ubi_leb_unmap() should do that.
 				 */
 				dst->cdescs[i].cpeb = src->cdescs[i].cpeb;
 
@@ -2500,7 +2487,7 @@ int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	int i, err, num_volumes;
 	struct ubi_ainf_volume *av;
 	struct ubi_volume *vol;
-	struct ubi_ainf_leb *leb;
+	struct ubi_ainf_peb *aeb;
 	struct rb_node *rb;
 
 	dbg_eba("initialize EBA sub-system");
@@ -2539,19 +2526,15 @@ int ubi_eba_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 		if (!av)
 			continue;
 
-		ubi_rb_for_each_entry(rb, leb, &av->root, rb) {
-			if (leb->lnum >= vol->avail_lebs) {
+		ubi_rb_for_each_entry(rb, aeb, &av->root, u.rb) {
+			if (aeb->lnum >= vol->avail_lebs)
 				/*
 				 * This may happen in case of an unclean reboot
 				 * during re-size.
 				 */
-				ubi_move_aeb_to_list(ubi, av, leb, &ai->erase);
-			} else {
-				struct ubi_ainf_peb *peb;
-
-				peb = ubi_ainf_leb_to_peb(leb);
-				update_desc_pnum(vol, leb->lnum, peb->pnum);
-			}
+				ubi_move_aeb_to_list(av, aeb, &ai->erase);
+			else
+				ubi_eba_set_pnum(vol, aeb->lnum, aeb->pnum);
 		}
 
 		vol->eba_tbl->free_pebs = ubi_eba_count_free_pebs(vol);

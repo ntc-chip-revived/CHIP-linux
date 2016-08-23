@@ -187,15 +187,15 @@ void ubi_dump_av(const struct ubi_ainf_volume *av)
  * @aeb: the object to dump
  * @type: object type: 0 - not corrupted, 1 - corrupted
  */
-void ubi_dump_aeb(const struct ubi_ainf_peb *apeb, int type)
+void ubi_dump_aeb(const struct ubi_ainf_peb *aeb, int type)
 {
 	pr_err("eraseblock attaching information dump:\n");
-	pr_err("\tec       %d\n", apeb->ec);
-	pr_err("\tpnum     %d\n", apeb->pnum);
+	pr_err("\tec       %d\n", aeb->ec);
+	pr_err("\tpnum     %d\n", aeb->pnum);
 	if (type == 0) {
-		pr_err("\tlnum     %d\n", apeb->lebs[0].lnum);
-		pr_err("\tscrub    %d\n", apeb->scrub);
-		pr_err("\tsqnum    %llu\n", apeb->sqnum);
+		pr_err("\tlnum     %d\n", aeb->lnum);
+		pr_err("\tscrub    %d\n", aeb->scrub);
+		pr_err("\tsqnum    %llu\n", aeb->sqnum);
 	}
 }
 
