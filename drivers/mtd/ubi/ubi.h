@@ -655,20 +655,15 @@ struct ubi_device {
 	struct ubi_debug_info dbg;
 };
 
-struct ubi_ainf_leb_copy_info {
-	u32 data_crc;
-	u32 data_size;
-};
-
 struct ubi_ainf_leb {
 	union {
 		 struct list_head list;
 		 struct rb_node rb;
 	};
+	int copy_flag:1;
 	int invalid:1;
 	int lpos;
 	int lnum;
-	struct ubi_ainf_leb_copy_info copy;
 };
 
 /**
@@ -776,7 +771,6 @@ struct ubi_attach_info {
 	struct list_head free;
 	struct list_head erase;
 	struct list_head alien;
-	int lebs_per_cpeb;
 	int corr_peb_count;
 	int empty_peb_count;
 	int alien_peb_count;
