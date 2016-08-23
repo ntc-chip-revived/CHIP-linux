@@ -374,41 +374,24 @@ static int process_pool_aeb(struct ubi_device *ubi, struct ubi_attach_info *ai,
 			    struct ubi_vid_hdr *new_vh,
 			    struct ubi_ainf_peb *new_aeb)
 {
-	struct ubi_ainf_volume *av, *tmp_av = NULL;
-	struct rb_node **p = &ai->volumes.rb_node, *parent = NULL;
-	int found = 0;
+	int vol_id = be32_to_cpu(new_vh->vol_id);
+	struct ubi_ainf_volume *av;
 
-	if (be32_to_cpu(new_vh->vol_id) == UBI_FM_SB_VOLUME_ID ||
-		be32_to_cpu(new_vh->vol_id) == UBI_FM_DATA_VOLUME_ID) {
+	if (vol_id == UBI_FM_SB_VOLUME_ID || vol_id == UBI_FM_DATA_VOLUME_ID) {
 		kmem_cache_free(ai->aeb_slab_cache, new_aeb);
 
 		return 0;
 	}
 
 	/* Find the volume this SEB belongs to */
-	while (*p) {
-		parent = *p;
-		tmp_av = rb_entry(parent, struct ubi_ainf_volume, rb);
-
-		if (be32_to_cpu(new_vh->vol_id) > tmp_av->vol_id)
-			p = &(*p)->rb_left;
-		else if (be32_to_cpu(new_vh->vol_id) < tmp_av->vol_id)
-			p = &(*p)->rb_right;
-		else {
-			found = 1;
-			break;
-		}
-	}
-
-	if (found)
-		av = tmp_av;
-	else {
+	av = ubi_find_av(ai, vol_id);
+	if (!av) {
 		ubi_err(ubi, "orphaned volume in fastmap pool!");
 		kmem_cache_free(ai->aeb_slab_cache, new_aeb);
 		return UBI_BAD_FASTMAP;
 	}
 
-	ubi_assert(be32_to_cpu(new_vh->vol_id) == av->vol_id);
+	ubi_assert(vol_id == av->vol_id);
 
 	return update_vol(ubi, ai, av, new_vh, new_aeb);
 }
@@ -464,7 +447,7 @@ static int scan_pool(struct ubi_device *ubi, struct ubi_attach_info *ai,
 	struct ubi_vid_hdr *vh;
 	struct ubi_ec_hdr *ech;
 	struct ubi_ainf_peb *new_aeb;
-	int i, pnum, err, ret = 0;
+	int i, pnum, err, ret = 0, nhdrs;
 
 	ech = kzalloc(ubi->ec_hdr_alsize, GFP_KERNEL);
 	if (!ech)
@@ -516,7 +499,7 @@ static int scan_pool(struct ubi_device *ubi, struct ubi_attach_info *ai,
 			goto out;
 		}
 
-		err = ubi_io_read_vid_hdr(ubi, pnum, vh, 0);
+		err = ubi_io_read_vid_hdrs(ubi, pnum, vh, &nhdrs, 0);
 		if (err == UBI_IO_FF || err == UBI_IO_FF_BITFLIPS) {
 			unsigned long long ec = be64_to_cpu(ech->ec);
 			unmap_peb(ai, pnum);

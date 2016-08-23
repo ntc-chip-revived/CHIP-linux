@@ -111,11 +111,14 @@ struct ubi_ainf_peb *ubi_ainf_create_peb(struct ubi_attach_info *ai, int pnum,
 	apeb->ec = ec;
 	apeb->scrub = scrub;
 
-	if (!nhdrs || !hdrs) {
-		apeb->lebs[0].lnum = UBI_UNKNOWN;
-		apeb->vol_id = UBI_UNKNOWN;
-		return apeb;
+	apeb->vol_id = UBI_UNKNOWN;
+	for (i = 0; i < ai->lebs_per_cpeb; i++) {
+		apeb->lebs[i].lnum = UBI_UNKNOWN;
+		apeb->lebs[i].invalid = 1;
 	}
+
+	if (!nhdrs || !hdrs)
+		return apeb;
 
 	if (nhdrs > 1)
 		apeb->consolidated = 1;
@@ -130,11 +133,118 @@ struct ubi_ainf_peb *ubi_ainf_create_peb(struct ubi_attach_info *ai, int pnum,
 		ubi_assert(apeb->sqnum + i == be64_to_cpu(hdrs[i].sqnum));
 
 		aleb->lnum = be32_to_cpu(hdrs[i].lnum);
-		if (hdrs[i].copy_flag)
-			aleb->copy_flag = 1;
+		if (hdrs[i].copy_flag) {
+			aleb->copy.data_crc = be32_to_cpu(hdrs[i].data_crc);
+			aleb->copy.data_size = be32_to_cpu(hdrs[i].data_size);
+		}
 	}
 
 	return apeb;
+}
+
+void ubi_ainf_invalidate_leb(struct ubi_attach_info *ai,
+			     struct ubi_ainf_leb *aleb,
+			     struct list_head *list,
+			     int to_head)
+{
+	struct ubi_ainf_peb *apeb = ubi_ainf_leb_to_peb(aleb);
+	int i;
+
+	aleb->invalid = 1;
+	for (i = 0; i < ai->lebs_per_cpeb; i++) {
+		if (!apeb->lebs[i].invalid && apeb->lebs[i].lnum >= 0)
+			return;
+	}
+
+	/* No list provided, free the object. */
+	if (!list) {
+		kmem_cache_free(ai->aeb_slab_cache, apeb);
+		return;
+	}
+
+	if (to_head)
+		list_add(&apeb->lebs[0].list, list);
+	else
+		list_add_tail(&apeb->lebs[0].list, list);
+}
+
+int ubi_ainf_keep_latest_leb(struct ubi_device *ubi,
+			     struct ubi_attach_info *ai,
+			     struct ubi_ainf_volume *av,
+			     struct ubi_ainf_leb *oleb,
+			     struct ubi_ainf_leb *nleb)
+{
+	struct ubi_ainf_peb *apeb;
+	unsigned long long osqnum, nsqnum;
+	struct ubi_ainf_leb *lleb = NULL, *rleb;
+	bool corrupted = false;
+	int err;
+	u32 crc;
+
+	apeb = ubi_ainf_leb_to_peb(oleb);
+	osqnum = apeb->sqnum + oleb->lpos;
+	apeb = ubi_ainf_leb_to_peb(nleb);
+	nsqnum = apeb->sqnum + nleb->lpos;
+
+	if (osqnum == nsqnum) {
+		/*
+		 * This must be a really ancient UBI image which has been
+		 * created before sequence numbers support has been added. At
+		 * that times we used 32-bit LEB versions stored in logical
+		 * eraseblocks. That was before UBI got into mainline. We do not
+		 * support these images anymore. Well, those images still work,
+		 * but only if no unclean reboots happened.
+		 */
+		ubi_err(ubi, "unsupported on-flash UBI format");
+		return -EINVAL;
+	}
+
+	if (osqnum > nsqnum) {
+		lleb = oleb;
+		rleb = nleb;
+	} else {
+		lleb = nleb;
+		rleb = oleb;
+	}
+
+	/* If the LEB is not a copy we can skip the CRC check. */
+	if (!lleb->copy.data_size)
+		goto out;
+
+	apeb = ubi_ainf_leb_to_peb(lleb);
+
+	mutex_lock(&ubi->buf_mutex);
+	err = ubi_io_read_data(ubi, ubi->peb_buf, apeb->pnum, 0, len);
+	if (err && err != UBI_IO_BITFLIPS && !mtd_is_eccerr(err))
+		goto err_unlock;
+
+	crc = crc32(UBI_CRC32_INIT, ubi->peb_buf, len);
+	if (crc != lleb->copy.data_crc) {
+		dbg_bld("PEB %d CRC error: calculated %#08x, must be %#08x",
+			apeb->pnum, crc, lleb->copy.data_crc);
+		corrupted = true;
+	} else {
+		dbg_bld("PEB %d CRC is OK", apeb->pnum);
+
+		if (err == UBI_IO_BITFLIPS)
+			apeb->scrub = 1;
+	}
+	mutex_unlock(&ubi->buf_mutex);
+
+out:
+	if ((lleb == nleb && !corrupted) || (lleb == oleb && corrupted))
+		rb_replace_node(oleb->rb, nleb->rb, &av->root);
+
+	if (corrupted)
+		rleb = lleb;
+
+	ubi_ainf_invalidate_leb(ai, rleb, &ai->erase, corrupted);
+
+	return 0;
+
+err_unlock:
+	mutex_unlock(&ubi->buf_mutex);
+	return err;
 }
 
 /**
@@ -478,52 +588,15 @@ out_free_vidh:
 	return err;
 }
 
-/**
- * ubi_add_to_av - add used physical eraseblock to the attaching information.
- * @ubi: UBI device description object
- * @ai: attaching information
- * @pnum: the physical eraseblock number
- * @ec: erase counter
- * @vid_hdr: the volume identifier header
- * @nhdrs: number of VID headers
- * @bitflips: if bit-flips were detected when this physical eraseblock was read
- *
- * This function adds information about a used physical eraseblock to the
- * 'used' tree of the corresponding volume. The function is rather complex
- * because it has to handle cases when this is not the first physical
- * eraseblock belonging to the same logical eraseblock, and the newer one has
- * to be picked, while the older one has to be dropped. This function returns
- * zero in case of success and a negative error code in case of failure.
- */
-int ubi_add_to_av(struct ubi_device *ubi, struct ubi_attach_info *ai, int pnum,
-		  int ec, const struct ubi_vid_hdr *vid_hdrs, int nhdrs,
-		  int bitflips)
+static int ubi_ainf_add_leb_to_av(struct ubi_device *ubi,
+				  struct ubi_attach_info *ai,
+				  struct ubi_ainf_volume *av,
+				  struct ubi_ainf_leb *naleb,
+				  struct ubi_vid_hdr *vid_hdr)
 {
-	int err, vol_id, lnum;
-	struct ubi_ainf_volume *av;
 	struct ubi_ainf_peb *napeb, *apeb;
 	struct rb_node **p, *parent = NULL;
-	unsigned long long sqnum;
-
-	ubi_assert(nhdrs > 1);
-
-	sqnum = be64_to_cpu(vid_hdrs->sqnum);
-	vol_id = be32_to_cpu(vid_hdrs->vol_id);
-	lnum = be32_to_cpu(vid_hdrs->lnum);
-
-	dbg_bld("PEB %d, LEB %d:%d, EC %d, sqnum %llu, bitflips %d",
-		pnum, vol_id, lnum, ec, sqnum, bitflips);
-
-	av = add_volume(ai, vol_id, pnum, vid_hdrs);
-	if (IS_ERR(av))
-		return PTR_ERR(av);
-
-	napeb = ubi_ainf_create_peb(ai, pnum, ec, vid_hdrs, nhdrs, bitflips);
-	if (IS_ERR(napeb))
-		return PTR_ERR(napeb);
-
-	if (ai->max_sqnum < napeb->sqnum + nhdrs - 1)
-		ai->max_sqnum = napeb->sqnum + nhdrs - 1;
+	int err;
 
 	/*
 	 * Walk the RB-tree of logical eraseblocks of volume @vol_id to look
@@ -536,8 +609,8 @@ int ubi_add_to_av(struct ubi_device *ubi, struct ubi_attach_info *ai, int pnum,
 
 		parent = *p;
 		aleb = rb_entry(parent, struct ubi_ainf_leb, rb);
-		if (lnum != aleb->lnum) {
-			if (lnum < aleb->lnum)
+		if (naleb->lnum != aleb->lnum) {
+			if (naleb->lnum < aleb->lnum)
 				p = &(*p)->rb_left;
 			else
 				p = &(*p)->rb_right;
@@ -571,84 +644,92 @@ int ubi_add_to_av(struct ubi_device *ubi, struct ubi_attach_info *ai, int pnum,
 			ubi_err(ubi, "two LEBs with same sequence number %llu",
 				napeb->sqnum);
 			ubi_dump_aeb(apeb, 0);
-			ubi_dump_vid_hdr(vid_hdrs);
+			ubi_dump_vid_hdr(vid_hdr);
 			return -EINVAL;
 		}
 
-		/*
-		 * Now we have to drop the older one and preserve the newer
-		 * one.
-		 */
-		cmp_res = ubi_compare_lebs(ubi, aleb, pnum, vid_hdrs);
-		if (cmp_res < 0)
-			return cmp_res;
-
-		if (cmp_res & 1) {
-			/*
-			 * This logical eraseblock is newer than the one
-			 * found earlier.
-			 */
-			err = validate_vid_hdr(ubi, vid_hdrs, av, pnum);
-			if (err)
-				return err;
-
-			err = add_to_list(ai, apeb->pnum, apeb->vol_id,
-					  aleb->lnum, apeb->ec, cmp_res & 4,
-					  &ai->erase);
-			if (err)
-				return err;
-
-			apeb->ec = ec;
-			apeb->pnum = pnum;
-			apeb->vol_id = vol_id;
-			apeb->lebs[0].lnum = lnum;
-			apeb->scrub = ((cmp_res & 2) || bitflips);
-			aleb->copy_flag = vid_hdrs->copy_flag;
-			apeb->sqnum = napeb->sqnum;
-
-			if (av->highest_lnum == lnum)
-				av->last_data_size =
-					be32_to_cpu(vid_hdrs->data_size);
-
-			return 0;
-		} else {
-			/*
-			 * This logical eraseblock is older than the one found
-			 * previously.
-			 */
-			return add_to_list(ai, pnum, vol_id, lnum, ec,
-					   cmp_res & 4, &ai->erase);
-		}
+		return ubi_ainf_keep_latest_leb(ubi, ai, av, aleb, naleb);
 	}
 
-	/*
-	 * We've met this logical eraseblock for the first time, add it to the
-	 * attaching information.
-	 */
-
-	err = validate_vid_hdr(ubi, vid_hdrs, av, pnum);
-	if (err)
-		return err;
-	apeb = kmem_cache_alloc(ai->aeb_slab_cache, GFP_KERNEL);
-	if (!apeb)
-		return -ENOMEM;
-
-	apeb->ec = ec;
-	apeb->pnum = pnum;
-	apeb->vol_id = vol_id;
-	apeb->lebs[0].lnum = lnum;
-	apeb->scrub = bitflips;
-	apeb->lebs[0].copy_flag = vid_hdrs->copy_flag;
-	apeb->sqnum = napeb->sqnum;
-
-	if (av->highest_lnum <= lnum) {
-		av->highest_lnum = lnum;
-		av->last_data_size = be32_to_cpu(vid_hdrs->data_size);
+	if (av->highest_lnum <= naleb->lnum) {
+		av->highest_lnum = naleb->lnum;
+		av->last_data_size = be32_to_cpu(vid_hdr->data_size);
 	}
 
 	av->leb_count += 1;
-	rb_link_node(&apeb->lebs[0].rb, parent, p);
-	rb_insert_color(&apeb->lebs[0].rb, &av->root);
+	rb_link_node(&naleb->rb, parent, p);
+	rb_insert_color(&naleb->rb, &av->root);
+
+	return 0;
+}
+
+/**
+ * ubi_add_to_av - add used physical eraseblock to the attaching information.
+ * @ubi: UBI device description object
+ * @ai: attaching information
+ * @pnum: the physical eraseblock number
+ * @ec: erase counter
+ * @vid_hdr: the volume identifier header
+ * @nhdrs: number of VID headers
+ * @bitflips: if bit-flips were detected when this physical eraseblock was read
+ *
+ * This function adds information about a used physical eraseblock to the
+ * 'used' tree of the corresponding volume. The function is rather complex
+ * because it has to handle cases when this is not the first physical
+ * eraseblock belonging to the same logical eraseblock, and the newer one has
+ * to be picked, while the older one has to be dropped. This function returns
+ * zero in case of success and a negative error code in case of failure.
+ */
+int ubi_add_to_av(struct ubi_device *ubi, struct ubi_attach_info *ai, int pnum,
+		  int ec, const struct ubi_vid_hdr *vid_hdrs, int nhdrs,
+		  int bitflips)
+{
+	int err, vol_id, lnum;
+	struct ubi_ainf_volume *av;
+	struct ubi_ainf_peb *napeb, *apeb;
+	struct rb_node **p, *parent = NULL;
+	unsigned long long sqnum;
+	int i;
+
+	ubi_assert(nhdrs > 1);
+
+	sqnum = be64_to_cpu(vid_hdrs->sqnum);
+	vol_id = be32_to_cpu(vid_hdrs->vol_id);
+	lnum = be32_to_cpu(vid_hdrs->lnum);
+
+	dbg_bld("PEB %d, LEB %d:%d, EC %d, sqnum %llu, bitflips %d",
+		pnum, vol_id, lnum, ec, sqnum, bitflips);
+
+	av = add_volume(ai, vol_id, pnum, vid_hdrs);
+	if (IS_ERR(av))
+		return PTR_ERR(av);
+
+	for (i = 0; i < nhdrs; i++) {
+		err = validate_vid_hdr(ubi, vid_hdrs, av, pnum);
+		if (err)
+			return err;
+	}
+
+	napeb = ubi_ainf_create_peb(ai, pnum, ec, vid_hdrs, nhdrs, bitflips);
+	if (IS_ERR(napeb))
+		return PTR_ERR(napeb);
+
+	if (ai->max_sqnum < napeb->sqnum + nhdrs - 1)
+		ai->max_sqnum = napeb->sqnum + nhdrs - 1;
+
+	for (i = 0; i < nhdrs; i++) {
+		err = ubi_ainf_add_leb_to_av(ubi, ai, av, &apeb->lebs[i],
+					     &vid_hdrs[i]);
+		if (err)
+			goto err_free_peb;
+	}
+
+	return 0;
+
+err_free_peb:
+	for (; i < nhdrs; i++)
+		ubi_ainf_invalidate_leb(ai, &apeb->lebs[i], NULL, 0);
+
 	return 0;
 }
 
