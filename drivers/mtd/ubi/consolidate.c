@@ -316,6 +316,10 @@ static int consolidate_lebs(struct ubi_device *ubi)
 					      lnum))
 			opnums[i] = -1;
 	}
+
+	for (i = 0; i < ubi->lebs_per_cpeb; i++)
+		new_clebs[i].ilnum = new_clebs[i].lnum;
+
 	ubi->consolidated[pnum] = new_clebs;
 
 	up_read(&ubi->fm_eba_sem);
@@ -502,6 +506,31 @@ int ubi_conso_add_full_leb(struct ubi_device *ubi, int vol_id, int lnum)
 	return 0;
 }
 
+static void ubi_conso_invalidation_check(struct ubi_device *ubi, int pnum,
+					 int vol_id, int lnum)
+{
+	int i, j;
+
+	for (i = 0; i < ubi->peb_count; i++) {
+		struct ubi_leb_desc *clebs = ubi->consolidated[pnum];
+
+		if (!clebs)
+			continue;
+
+		for (j = 0; j < ubi->lebs_per_cpeb; j++) {
+			if (clebs[i].vol_id != vol_id)
+				continue;
+
+			if (clebs[i].lnum == lnum)
+				pr_err("%s:%i LEB %d:%d was mapped twice (PEB %d and %d)\n",
+				       __func__, __LINE__, vol_id, lnum, pnum, i);
+			else if (clebs[i].ilnum == lnum)
+				pr_err("%s:%i LEB %d:%d (PEB %d) has an old invalidated version (PEB %d) on flash\n",
+				       __func__, __LINE__, vol_id, lnum, pnum, i);
+		}
+	}
+}
+
 bool ubi_conso_invalidate_leb(struct ubi_device *ubi, int pnum, int vol_id,
 			      int lnum)
 {
@@ -524,13 +553,13 @@ bool ubi_conso_invalidate_leb(struct ubi_device *ubi, int pnum, int vol_id,
 	for (i = 0; i < ubi->lebs_per_cpeb; i++) {
 		if (clebs[i].lnum == lnum && clebs[i].vol_id == vol_id) {
 			clebs[i].lnum = -1;
-			clebs[i].vol_id = -1;
 			pos = i;
 		} else if (clebs[i].lnum >= 0) {
 			remaining++;
 		}
 	}
 
+	ubi_conso_invalidation_check(ubi, pnum, vol_id, lnum);
 	ubi_assert(pos >= 0);
 
 	if (remaining == ubi->lebs_per_cpeb - 1) {
@@ -544,10 +573,12 @@ bool ubi_conso_invalidate_leb(struct ubi_device *ubi, int pnum, int vol_id,
 	} else {
 		ubi_conso_remove_full_leb(ubi, vol_id, lnum);
 
+/*
 		if (!remaining) {
 			ubi->consolidated[pnum] = NULL;
 			kfree(clebs);
 		}
+*/
 	}
 	mutex_unlock(&ubi->conso_lock);
 

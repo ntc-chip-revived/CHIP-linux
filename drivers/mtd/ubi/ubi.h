@@ -186,6 +186,7 @@ enum {
 struct ubi_leb_desc {
 	int vol_id;
 	int lnum;
+	int ilnum;
 };
 
 /**

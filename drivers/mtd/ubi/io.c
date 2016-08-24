@@ -479,6 +479,7 @@ static int do_sync_erase(struct ubi_device *ubi, int pnum)
 	int err, retries = 0;
 	struct erase_info ei;
 	wait_queue_head_t wq;
+	struct ubi_leb_desc *clebs;
 
 	dbg_io("erase PEB %d", pnum);
 	ubi_assert(pnum >= 0 && pnum < ubi->peb_count);
@@ -538,6 +539,10 @@ retry:
 		ubi_err(ubi, "cannot erase PEB %d (emulated)", pnum);
 		return -EIO;
 	}
+
+	clebs = ubi->consolidated[pnum];
+	ubi->consolidated[pnum] = NULL;
+	kfree(clebs);
 
 	return 0;
 }
